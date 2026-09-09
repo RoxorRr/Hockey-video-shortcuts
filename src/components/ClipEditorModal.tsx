@@ -28,8 +28,14 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [name, setName] = useState(clip?.name || '');
-  const [startTime, setStartTime] = useState(clip?.startTime || 0);
-  const [endTime, setEndTime] = useState(clip?.endTime || 3);
+  const [maxDuration, setMaxDuration] = useState<number>(() => {
+    if (clip && Number.isFinite(clip.originalDuration) && clip.originalDuration > 0.1) {
+      return clip.originalDuration;
+    }
+    return 5.0;
+  });
+  const [startTime, setStartTime] = useState(() => (clip && Number.isFinite(clip.startTime) ? clip.startTime : 0));
+  const [endTime, setEndTime] = useState(() => (clip && Number.isFinite(clip.endTime) && clip.endTime > 0 ? clip.endTime : 3.0));
   const [volume, setVolume] = useState(clip?.volume ?? 1);
   const [playbackRate, setPlaybackRate] = useState(clip?.playbackRate ?? 1);
   const [tag, setTag] = useState<HockeyTag | undefined>(clip?.tag);
@@ -37,17 +43,49 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
 
   useEffect(() => {
     if (clip) {
+      const dur = Number.isFinite(clip.originalDuration) && clip.originalDuration > 0.1 ? clip.originalDuration : 5.0;
+      const s = Number.isFinite(clip.startTime) && clip.startTime >= 0 ? clip.startTime : 0;
+      const e = Number.isFinite(clip.endTime) && clip.endTime > s ? clip.endTime : dur;
+
       setName(clip.name);
-      setStartTime(clip.startTime);
-      setEndTime(clip.endTime);
-      setVolume(clip.volume);
-      setPlaybackRate(clip.playbackRate);
+      setMaxDuration(dur);
+      setStartTime(s);
+      setEndTime(e);
+      setVolume(clip.volume ?? 1);
+      setPlaybackRate(clip.playbackRate ?? 1);
       setTag(clip.tag);
       setCustomTagText(clip.customTagText || '');
     }
   }, [clip]);
 
   if (!isOpen || !clip) return null;
+
+  const handleVideoLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const v = e.currentTarget;
+    let dur = v.duration;
+    if (dur === Infinity) {
+      // Chromium WebM workaround
+      v.currentTime = 1e10;
+      v.ontimeupdate = () => {
+        v.ontimeupdate = null;
+        dur = v.duration;
+        if (!Number.isFinite(dur)) dur = v.currentTime;
+        v.currentTime = startTime;
+        if (Number.isFinite(dur) && dur > 0.1) {
+          setMaxDuration(dur);
+          if (endTime > dur || endTime <= 0) setEndTime(dur);
+        }
+      };
+      return;
+    }
+
+    if (Number.isFinite(dur) && dur > 0.1) {
+      setMaxDuration(dur);
+      if (!Number.isFinite(endTime) || endTime > dur || endTime <= 0) {
+        setEndTime(dur);
+      }
+    }
+  };
 
   const togglePlay = () => {
     const video = videoRef.current;
@@ -75,7 +113,7 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
   };
 
   const handleSeekStart = (val: number) => {
-    const clamped = Math.max(0, Math.min(val, endTime - 0.2));
+    const clamped = Math.max(0, Math.min(val, endTime - 0.1));
     setStartTime(clamped);
     if (videoRef.current) {
       videoRef.current.currentTime = clamped;
@@ -83,7 +121,7 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
   };
 
   const handleSeekEnd = (val: number) => {
-    const clamped = Math.min(clip.originalDuration, Math.max(val, startTime + 0.2));
+    const clamped = Math.min(maxDuration, Math.max(val, startTime + 0.1));
     setEndTime(clamped);
     if (videoRef.current) {
       videoRef.current.currentTime = clamped;
@@ -94,6 +132,7 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
     onSave({
       ...clip,
       name,
+      originalDuration: maxDuration,
       startTime,
       endTime,
       volume,
@@ -132,6 +171,7 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
               ref={videoRef}
               src={clip.url}
               playsInline
+              onLoadedMetadata={handleVideoLoadedMetadata}
               onTimeUpdate={handleTimeUpdate}
               className="w-full h-full object-contain cursor-pointer"
               onClick={togglePlay}
@@ -166,22 +206,22 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
                 Trim Clip Range
               </span>
               <span className="text-xs font-mono font-bold text-sky-400 bg-sky-950/80 px-2 py-0.5 rounded border border-sky-800/60">
-                Duration: {trimmedDuration.toFixed(2)}s
+                Duration: {Number.isFinite(trimmedDuration) ? trimmedDuration.toFixed(2) : '0.00'}s
               </span>
             </div>
 
             {/* Start Time */}
             <div>
               <div className="flex justify-between text-xs text-slate-400 mb-1">
-                <span>Start Point: {startTime.toFixed(2)}s</span>
-                <span>Max: {clip.originalDuration.toFixed(2)}s</span>
+                <span>Start Point: {Number.isFinite(startTime) ? startTime.toFixed(2) : '0.00'}s</span>
+                <span>Max: {Number.isFinite(maxDuration) ? maxDuration.toFixed(2) : '0.00'}s</span>
               </div>
               <input
                 type="range"
                 min={0}
-                max={clip.originalDuration}
+                max={Math.max(0.2, maxDuration)}
                 step={0.05}
-                value={startTime}
+                value={Number.isFinite(startTime) ? startTime : 0}
                 onChange={(e) => handleSeekStart(parseFloat(e.target.value))}
                 className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
               />
@@ -190,15 +230,15 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
             {/* End Time */}
             <div>
               <div className="flex justify-between text-xs text-slate-400 mb-1">
-                <span>End Point: {endTime.toFixed(2)}s</span>
-                <span>Max: {clip.originalDuration.toFixed(2)}s</span>
+                <span>End Point: {Number.isFinite(endTime) ? endTime.toFixed(2) : '0.00'}s</span>
+                <span>Max: {Number.isFinite(maxDuration) ? maxDuration.toFixed(2) : '0.00'}s</span>
               </div>
               <input
                 type="range"
                 min={0}
-                max={clip.originalDuration}
+                max={Math.max(0.2, maxDuration)}
                 step={0.05}
-                value={endTime}
+                value={Number.isFinite(endTime) ? endTime : 0}
                 onChange={(e) => handleSeekEnd(parseFloat(e.target.value))}
                 className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
               />

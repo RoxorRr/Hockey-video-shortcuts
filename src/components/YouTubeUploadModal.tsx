@@ -23,7 +23,9 @@ interface YouTubeUploadModalProps {
   videoBlob: Blob | null;
   isShorts: boolean;
   user: User | null;
-  onSignIn: () => void;
+  onSignIn: (options?: { useGsiOnly?: boolean; clientId?: string }) => Promise<void> | void;
+  authError?: string | null;
+  onClearAuthError?: () => void;
 }
 
 export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
@@ -33,6 +35,8 @@ export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
   isShorts,
   user,
   onSignIn,
+  authError,
+  onClearAuthError,
 }) => {
   const [title, setTitle] = useState(
     isShorts
@@ -47,6 +51,7 @@ export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
 
   const [channelInfo, setChannelInfo] = useState<YouTubeChannelInfo | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [uploadStatusText, setUploadStatusText] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -54,6 +59,9 @@ export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [showManualToken, setShowManualToken] = useState(false);
   const [manualTokenInput, setManualTokenInput] = useState('');
+  const [manualTokenStatus, setManualTokenStatus] = useState<string | null>(null);
+  const [customClientId, setCustomClientId] = useState(() => localStorage.getItem('hockey_editor_google_client_id') || '');
+  const [showCustomClientId, setShowCustomClientId] = useState(false);
 
   // Check channel info if token is available
   useEffect(() => {
@@ -137,16 +145,33 @@ export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
     }
   };
 
-  const handleApplyManualToken = () => {
-    if (manualTokenInput.trim()) {
-      setManualAccessToken(manualTokenInput.trim());
-      setShowManualToken(false);
-      const token = getAccessToken();
-      if (token) {
-        getMyYouTubeChannel(token).then((info) => {
-          if (info) setChannelInfo(info);
-        });
+  const handleApplyManualToken = async () => {
+    const raw = manualTokenInput.trim();
+    if (!raw) return;
+    setManualTokenStatus('Verifying token with YouTube API...');
+    setManualAccessToken(raw);
+    try {
+      const info = await getMyYouTubeChannel(raw);
+      if (info) {
+        setChannelInfo(info);
+        setManualTokenStatus(`Connected to YouTube channel: ${info.title}`);
+        setShowManualToken(false);
+      } else {
+        setManualTokenStatus('Token accepted! (Channel info could not be fetched, but ready for upload)');
+        setShowManualToken(false);
       }
+    } catch (err: any) {
+      setManualTokenStatus(`Token applied. Note: ${err.message || 'Ready for upload attempt'}`);
+      setShowManualToken(false);
+    }
+  };
+
+  const handleSaveCustomClientId = () => {
+    const cid = customClientId.trim();
+    if (cid) {
+      localStorage.setItem('hockey_editor_google_client_id', cid);
+    } else {
+      localStorage.removeItem('hockey_editor_google_client_id');
     }
   };
 
@@ -303,7 +328,7 @@ export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
                 <div className="bg-slate-950 border border-amber-900/60 rounded-xl p-4 space-y-3">
                   <div className="flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                    <div>
+                    <div className="flex-1">
                       <p className="text-xs font-bold text-white">YouTube Authorization Required</p>
                       <p className="text-[11px] text-slate-400 mt-0.5">
                         Connect your Google account with YouTube permissions to upload your hockey videos directly.
@@ -311,38 +336,151 @@ export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Standard Sign in with Google button */}
+                  {/* Auth Error Banner if sign-in failed */}
+                  {authError && (
+                    <div className="bg-red-950/80 border border-red-800 rounded-lg p-3 text-xs text-red-200 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold flex items-center gap-1.5 text-red-300">
+                          <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                          Sign-in Notice:
+                        </span>
+                        {onClearAuthError && (
+                          <button
+                            onClick={onClearAuthError}
+                            className="text-[10px] text-slate-400 hover:text-white"
+                          >
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[11px] font-mono break-all">{authError}</p>
+
+                      {/* Domain whitelist guidance for Vercel */}
+                      <div className="pt-1 text-[11px] text-amber-200/90 border-t border-red-900/60 mt-1">
+                        <p className="font-semibold text-amber-300">Fixing on Vercel / Custom Domain:</p>
+                        <p className="mt-0.5 text-slate-300">
+                          Add your current domain <span className="font-mono text-white bg-black/40 px-1 py-0.5 rounded">{typeof window !== 'undefined' ? window.location.hostname : 'your-domain'}</span> to <strong className="text-white">Firebase Console &gt; Authentication &gt; Settings &gt; Authorized domains</strong>.
+                        </p>
+                        <p className="mt-1 text-slate-300">
+                          Alternatively, use <strong className="text-white">Option B (Direct Google Identity)</strong> or <strong className="text-white">Option C (OAuth Playground Token)</strong> below!
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {manualTokenStatus && (
+                    <div className="bg-sky-950/60 border border-sky-800/80 rounded-lg p-2.5 text-xs text-sky-200">
+                      {manualTokenStatus}
+                    </div>
+                  )}
+
+                  {/* Option 1: Standard Firebase Sign in with Google */}
                   <button
-                    onClick={onSignIn}
-                    className="w-full flex items-center justify-center gap-2 bg-white hover:bg-slate-100 text-slate-900 px-4 py-2 rounded-xl text-xs font-bold shadow transition"
+                    disabled={isSigningIn}
+                    onClick={async () => {
+                      setIsSigningIn(true);
+                      try {
+                        await onSignIn({ clientId: customClientId.trim() || undefined });
+                      } finally {
+                        setIsSigningIn(false);
+                      }
+                    }}
+                    className="w-full flex items-center justify-center gap-2 bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-900 px-4 py-2.5 rounded-xl text-xs font-bold shadow transition"
                   >
                     <Youtube className="w-4 h-4 text-red-600" />
-                    Sign in with Google (YouTube Upload)
+                    {isSigningIn ? 'Opening Google Sign-in...' : 'Sign in with Google (Standard)'}
                   </button>
 
-                  <div className="pt-1 text-center">
+                  {/* Option 2: Direct Google Identity Services (GSI) */}
+                  <button
+                    disabled={isSigningIn}
+                    onClick={async () => {
+                      setIsSigningIn(true);
+                      try {
+                        await onSignIn({ useGsiOnly: true, clientId: customClientId.trim() || undefined });
+                      } finally {
+                        setIsSigningIn(false);
+                      }
+                    }}
+                    className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-750 text-slate-200 px-3 py-2 rounded-xl text-xs font-medium border border-slate-700 transition"
+                  >
+                    <Key className="w-3.5 h-3.5 text-sky-400" />
+                    Direct Google OAuth (Recommended for Vercel)
+                  </button>
+
+                  {/* Option 3: Manual OAuth Token Input */}
+                  <div className="pt-1 flex items-center justify-between text-[11px] text-slate-400">
                     <button
+                      type="button"
                       onClick={() => setShowManualToken(!showManualToken)}
-                      className="text-[10px] text-slate-500 hover:text-slate-300 underline"
+                      className="text-sky-400 hover:text-sky-300 underline"
                     >
-                      {showManualToken ? 'Hide manual token input' : 'Enter OAuth access token manually'}
+                      {showManualToken ? 'Hide manual token input' : 'Paste OAuth Token (Instant / 0-setup)'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowCustomClientId(!showCustomClientId)}
+                      className="text-slate-400 hover:text-slate-200 underline text-[10px]"
+                    >
+                      {showCustomClientId ? 'Hide Client ID' : 'Custom Client ID'}
                     </button>
                   </div>
 
                   {showManualToken && (
-                    <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <div className="space-y-2.5 pt-2 border-t border-slate-800 bg-slate-900/50 p-3 rounded-lg">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-semibold text-slate-300">Google OAuth Bearer Token</span>
+                        <a
+                          href="https://developers.google.com/oauthplayground/#step1&apisSelect=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fyoutube.upload"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1 text-sky-400 hover:text-sky-300 font-medium"
+                        >
+                          Get Token in Google Playground
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                      <p className="text-[10px] text-slate-400">
+                        In OAuth Playground: select &quot;YouTube Data API v3 &gt; .../auth/youtube.upload&quot;, click Authorize APIs, then exchange for tokens and copy the Access token.
+                      </p>
                       <input
                         type="password"
                         value={manualTokenInput}
                         onChange={(e) => setManualTokenInput(e.target.value)}
-                        placeholder="Paste Google OAuth Bearer Token"
-                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white"
+                        placeholder="ya29.a0AfH6SM..."
+                        className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-red-500"
                       />
                       <button
+                        type="button"
                         onClick={handleApplyManualToken}
-                        className="w-full bg-slate-800 hover:bg-slate-700 text-xs text-white py-1 rounded"
+                        className="w-full bg-red-600 hover:bg-red-500 text-xs font-bold text-white py-1.5 rounded transition"
                       >
-                        Apply Token
+                        Apply &amp; Verify Token
+                      </button>
+                    </div>
+                  )}
+
+                  {showCustomClientId && (
+                    <div className="space-y-2 pt-2 border-t border-slate-800 bg-slate-900/50 p-3 rounded-lg">
+                      <label className="block text-[11px] font-semibold text-slate-300">
+                        Custom Google OAuth Client ID (Optional)
+                      </label>
+                      <p className="text-[10px] text-slate-400">
+                        If you have your own Google Cloud Web Client ID with authorized origins set to your Vercel URL.
+                      </p>
+                      <input
+                        type="text"
+                        value={customClientId}
+                        onChange={(e) => setCustomClientId(e.target.value)}
+                        placeholder="your-client-id.apps.googleusercontent.com"
+                        className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSaveCustomClientId}
+                        className="w-full bg-slate-800 hover:bg-slate-700 text-xs text-white py-1 rounded transition"
+                      >
+                        Save Client ID for this browser
                       </button>
                     </div>
                   )}

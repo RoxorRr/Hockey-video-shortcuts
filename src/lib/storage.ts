@@ -65,19 +65,24 @@ export async function saveProjectToStorage(
 ): Promise<void> {
   try {
     const db = await openDB();
-    const serializedClips: SerializedClip[] = clips.map((c) => ({
-      id: c.id,
-      name: c.name,
-      blob: c.blob,
-      originalDuration: c.originalDuration,
-      startTime: c.startTime,
-      endTime: c.endTime,
-      volume: c.volume,
-      playbackRate: c.playbackRate,
-      thumbnailUrl: c.thumbnailUrl,
-      tag: c.tag,
-      customTagText: c.customTagText,
-    }));
+    const serializedClips: SerializedClip[] = clips.map((c) => {
+      const origDur = Number.isFinite(c.originalDuration) && c.originalDuration > 0.05 ? c.originalDuration : 5.0;
+      const startT = Number.isFinite(c.startTime) && c.startTime >= 0 ? c.startTime : 0;
+      const endT = Number.isFinite(c.endTime) && c.endTime > startT ? c.endTime : origDur;
+      return {
+        id: c.id,
+        name: c.name,
+        blob: c.blob,
+        originalDuration: origDur,
+        startTime: startT,
+        endTime: endT,
+        volume: Number.isFinite(c.volume) ? c.volume : 1,
+        playbackRate: Number.isFinite(c.playbackRate) && c.playbackRate > 0 ? c.playbackRate : 1,
+        thumbnailUrl: c.thumbnailUrl,
+        tag: c.tag,
+        customTagText: c.customTagText,
+      };
+    });
 
     const projectData: SavedProjectData = {
       aspectRatio,
@@ -127,9 +132,16 @@ export async function loadProjectFromStorage(): Promise<{
         for (const sc of data.clips) {
           if (sc.blob) {
             const url = URL.createObjectURL(sc.blob);
+            const origDur = Number.isFinite(sc.originalDuration) && sc.originalDuration > 0.05 ? sc.originalDuration : 5.0;
+            const startT = Number.isFinite(sc.startTime) && sc.startTime >= 0 ? sc.startTime : 0;
+            const endT = Number.isFinite(sc.endTime) && sc.endTime > startT ? sc.endTime : origDur;
             revivedClips.push({
               ...sc,
               url,
+              originalDuration: origDur,
+              startTime: startT,
+              endTime: endT,
+              playbackRate: Number.isFinite(sc.playbackRate) && sc.playbackRate > 0 ? sc.playbackRate : 1.0,
             });
           }
         }

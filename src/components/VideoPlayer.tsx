@@ -240,6 +240,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const formatTime = (secs: number) => {
+    if (!Number.isFinite(secs) || isNaN(secs) || secs < 0) return '0:00.0';
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     const ms = Math.floor((secs % 1) * 10);
@@ -335,9 +336,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               id="timeline-scrubber-slider"
               type="range"
               min={0}
-              max={Math.max(0.1, totalDuration)}
+              max={Number.isFinite(totalDuration) && totalDuration > 0.1 ? totalDuration : 1}
               step={0.05}
-              value={currentTime}
+              value={Number.isFinite(currentTime) ? currentTime : 0}
               onChange={handleSeek}
               className="flex-1 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
             />

@@ -25,7 +25,10 @@ export function calculateTimeline(
 
   for (let i = 0; i < clips.length; i++) {
     const clip = clips[i];
-    const clipDuration = Math.max(0.1, (clip.endTime - clip.startTime) / clip.playbackRate);
+    const s = Number.isFinite(clip.startTime) && clip.startTime >= 0 ? clip.startTime : 0;
+    const e = Number.isFinite(clip.endTime) && clip.endTime > s ? clip.endTime : s + 3.0;
+    const r = Number.isFinite(clip.playbackRate) && clip.playbackRate > 0 ? clip.playbackRate : 1.0;
+    const clipDuration = Math.max(0.1, (e - s) / r);
 
     const segStart = currentTime;
     const segEnd = segStart + clipDuration;
@@ -57,7 +60,7 @@ export function calculateTimeline(
   }
 
   const lastSeg = segments[segments.length - 1];
-  const totalDuration = lastSeg ? lastSeg.clipEndInTimeline : 0;
+  const totalDuration = lastSeg && Number.isFinite(lastSeg.clipEndInTimeline) ? Math.max(0, lastSeg.clipEndInTimeline) : 0;
 
   return { segments, totalDuration };
 }

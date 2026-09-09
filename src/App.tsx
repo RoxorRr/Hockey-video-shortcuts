@@ -17,6 +17,7 @@ import { exportCombinedVideo } from './lib/videoRenderer';
 import { initAuth, googleSignIn, logout, getAccessToken } from './lib/firebase';
 import { getMyYouTubeChannel } from './lib/youtube';
 import { saveProjectToStorage, loadProjectFromStorage, clearProjectFromStorage } from './lib/storage';
+import { extractVideoMetadata } from './lib/videoMetadata';
 import type { User } from 'firebase/auth';
 import { Plus, Sparkles, UploadCloud } from 'lucide-react';
 
@@ -25,6 +26,7 @@ export default function App() {
   const [transitions, setTransitions] = useState<Transition[]>([]);
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16');
   const [currentTime, setCurrentTime] = useState(0);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Hockey Overlays
   const [overlaySettings, setOverlaySettings] = useState<HockeyOverlaySettings>({
@@ -119,9 +121,10 @@ export default function App() {
     }
   };
 
-  const handleSignIn = async () => {
+  const handleSignIn = async (options?: { useGsiOnly?: boolean; clientId?: string }) => {
+    setAuthError(null);
     try {
-      const { user: signedInUser, accessToken } = await googleSignIn();
+      const { user: signedInUser, accessToken } = await googleSignIn(options);
       setUser(signedInUser);
       if (accessToken) {
         const info = await getMyYouTubeChannel(accessToken);
@@ -129,6 +132,7 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Sign in failed:', err);
+      setAuthError(err?.message || 'Sign in failed. Check domain authorization or use direct token.');
     }
   };
 
@@ -138,70 +142,35 @@ export default function App() {
     setChannelTitle(undefined);
   };
 
-  // Helper to extract duration and thumbnail from user video files
-  const processVideoFile = (file: File): Promise<VideoClip> => {
-    return new Promise((resolve) => {
-      const url = URL.createObjectURL(file);
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.muted = true;
-      video.src = url;
+  // Helper to extract duration and thumbnail reliably from user video files
+  const processVideoFile = async (file: File): Promise<VideoClip> => {
+    const url = URL.createObjectURL(file);
+    const { duration, thumbnailUrl } = await extractVideoMetadata(file);
+    const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
 
-      video.onloadedmetadata = () => {
-        const dur = video.duration || 3.0;
-        video.currentTime = Math.min(1.0, dur / 2);
-      };
+    // Detect default tag
+    let tag: VideoClip['tag'] = 'GOAL';
+    const lower = nameWithoutExt.toLowerCase();
+    if (lower.includes('save') || lower.includes('goalie')) tag = 'SAVE';
+    else if (lower.includes('hit') || lower.includes('check')) tag = 'HIT';
+    else if (lower.includes('deke') || lower.includes('dangle')) tag = 'DEKE';
+    else if (lower.includes('ot') || lower.includes('winner')) tag = 'OT WINNER';
 
-      video.onseeked = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = 320;
-        canvas.height = 180;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        }
-        const thumbnailUrl = canvas.toDataURL('image/jpeg', 0.8);
-        const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+    const safeDuration = Number.isFinite(duration) && duration > 0.1 ? duration : 5.0;
 
-        // Detect default tag
-        let tag: VideoClip['tag'] = 'GOAL';
-        const lower = nameWithoutExt.toLowerCase();
-        if (lower.includes('save') || lower.includes('goalie')) tag = 'SAVE';
-        else if (lower.includes('hit') || lower.includes('check')) tag = 'HIT';
-        else if (lower.includes('deke') || lower.includes('dangle')) tag = 'DEKE';
-        else if (lower.includes('ot') || lower.includes('winner')) tag = 'OT WINNER';
-
-        resolve({
-          id: `clip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          name: nameWithoutExt,
-          url,
-          blob: file,
-          originalDuration: video.duration || 3.0,
-          startTime: 0,
-          endTime: video.duration || 3.0,
-          volume: 1.0,
-          playbackRate: 1.0,
-          thumbnailUrl,
-          tag,
-        });
-      };
-
-      video.onerror = () => {
-        const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
-        resolve({
-          id: `clip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          name: nameWithoutExt,
-          url,
-          blob: file,
-          originalDuration: 3.0,
-          startTime: 0,
-          endTime: 3.0,
-          volume: 1.0,
-          playbackRate: 1.0,
-          tag: 'GOAL',
-        });
-      };
-    });
+    return {
+      id: `clip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: nameWithoutExt,
+      url,
+      blob: file,
+      originalDuration: safeDuration,
+      startTime: 0,
+      endTime: safeDuration,
+      volume: 1.0,
+      playbackRate: 1.0,
+      thumbnailUrl,
+      tag,
+    };
   };
 
   const handleAddFiles = async (files: FileList | File[]) => {
@@ -513,6 +482,8 @@ export default function App() {
           isShorts={aspectRatio === '9:16'}
           user={user}
           onSignIn={handleSignIn}
+          authError={authError}
+          onClearAuthError={() => setAuthError(null)}
         />
       )}
     </div>

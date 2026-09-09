@@ -109,7 +109,10 @@ export const Timeline: React.FC<TimelineProps> = ({
             {clips.map((clip, index) => {
               const trans = transitions[index];
               const isSelected = selectedClipIndex === index;
-              const trimmedDuration = Math.max(0.1, clip.endTime - clip.startTime) / clip.playbackRate;
+              const s = Number.isFinite(clip.startTime) && clip.startTime >= 0 ? clip.startTime : 0;
+              const e = Number.isFinite(clip.endTime) && clip.endTime > s ? clip.endTime : s + 3.0;
+              const r = Number.isFinite(clip.playbackRate) && clip.playbackRate > 0 ? clip.playbackRate : 1.0;
+              const trimmedDuration = Math.max(0.1, (e - s) / r);
 
               return (
                 <React.Fragment key={clip.id}>
