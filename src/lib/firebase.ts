@@ -26,10 +26,49 @@ provider.setCustomParameters({
   access_type: 'offline',
 });
 
-// Cache token in memory / sessionStorage for active session
+// Cache token in memory & localStorage for active session
+const STORAGE_TOKEN_KEY = 'hockey_youtube_oauth_token';
+const STORAGE_USER_KEY = 'hockey_youtube_oauth_user';
+
 let cachedAccessToken: string | null = null;
 let customUser: { displayName?: string; email?: string; photoURL?: string; uid: string } | null = null;
 let isSigningIn = false;
+
+// Initialize from storage
+if (typeof window !== 'undefined') {
+  try {
+    const savedToken = localStorage.getItem(STORAGE_TOKEN_KEY) || sessionStorage.getItem(STORAGE_TOKEN_KEY);
+    if (savedToken && savedToken.trim()) {
+      cachedAccessToken = savedToken.trim();
+      const savedUser = localStorage.getItem(STORAGE_USER_KEY);
+      if (savedUser) {
+        customUser = JSON.parse(savedUser);
+      } else {
+        customUser = {
+          displayName: 'Connected YouTube Account',
+          email: '',
+          uid: 'saved-oauth-user',
+        };
+      }
+    }
+  } catch (e) {
+    // Ignore storage parse errors
+  }
+}
+
+export const isExternalDomain = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  return host.includes('vercel.app') || (!host.includes('run.app') && host !== 'localhost' && host !== '127.0.0.1');
+};
+
+export const hasCustomClientId = (): boolean => {
+  if (typeof window !== 'undefined') {
+    const stored = localStorage.getItem('custom_google_client_id');
+    if (stored && stored.trim()) return true;
+  }
+  return Boolean((import.meta as any).env?.VITE_GOOGLE_CLIENT_ID);
+};
 
 export const getStoredClientId = (): string => {
   if (typeof window !== 'undefined') {
@@ -53,19 +92,25 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string | null) => void,
   onAuthFailure?: () => void,
 ) => {
+  // If we already have a persisted token from storage, notify immediately
+  if (cachedAccessToken && customUser && onAuthSuccess) {
+    onAuthSuccess(customUser as any, cachedAccessToken);
+  }
+
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
       if (onAuthSuccess) {
         onAuthSuccess(user, cachedAccessToken);
       }
-    } else if (customUser) {
+    } else if (customUser && cachedAccessToken) {
       if (onAuthSuccess) {
         onAuthSuccess(customUser as any, cachedAccessToken);
       }
     } else {
-      cachedAccessToken = null;
-      if (onAuthFailure) {
-        onAuthFailure();
+      if (!cachedAccessToken) {
+        if (onAuthFailure) {
+          onAuthFailure();
+        }
       }
     }
   });
@@ -98,7 +143,7 @@ async function fetchGoogleUserProfile(token: string) {
   };
 }
 
-export const googleSignIn = async (options?: { useGsiOnly?: boolean }): Promise<{ user: User; accessToken: string }> => {
+export const googleSignIn = async (options?: { useGsiOnly?: boolean; clientId?: string }): Promise<{ user: User; accessToken: string }> => {
   if (isSigningIn) {
     throw new Error('Sign in is already in progress.');
   }
@@ -106,60 +151,64 @@ export const googleSignIn = async (options?: { useGsiOnly?: boolean }): Promise<
   isSigningIn = true;
 
   try {
-    // If running on an external domain like Vercel and not in preview, or if requested, try GSI or Firebase
-    if (!options?.useGsiOnly) {
-      try {
-        const result = await signInWithPopup(auth, provider);
-        const credential = GoogleAuthProvider.credentialFromResult(result);
+    const customCid = options?.clientId || (hasCustomClientId() ? getStoredClientId() : undefined);
 
-        if (credential?.accessToken) {
-          cachedAccessToken = credential.accessToken;
-          return { user: result.user, accessToken: cachedAccessToken };
-        }
-      } catch (firebaseErr: any) {
-        console.warn('Firebase popup sign-in encountered an error:', firebaseErr?.code || firebaseErr);
+    // On external domains (e.g. Vercel) without a custom Google Client ID:
+    // Google's OAuth server will block popups with "Access blocked: Authorization Error (origin_mismatch)"
+    // because the default AI Studio client ID is locked to AI Studio preview domains.
+    if (isExternalDomain() && !customCid) {
+      throw new Error(
+        `Google blocks sign-in popups on external domains (${window.location.hostname}) with "Access blocked: Authorization Error".\n\n` +
+        `To connect on Vercel:\n` +
+        `1. Recommended: Use Option 1 to paste an OAuth Token from Google Playground (0-setup, 30s).\n` +
+        `2. Or enter your own Google Cloud OAuth Web Client ID.`
+      );
+    }
 
-        // If domain is unauthorized in Firebase (e.g. deployed on Vercel), fall back to GSI
-        const isUnauthorizedDomain =
-          firebaseErr?.code === 'auth/unauthorized-domain' ||
-          (firebaseErr?.message && firebaseErr.message.includes('unauthorized-domain'));
-
-        if (!isUnauthorizedDomain && firebaseErr?.code === 'auth/popup-closed-by-user') {
-          throw new Error('Sign-in window was closed before completing. Please try again.');
-        }
-
-        // Try GSI directly
-        console.log('Attempting Google Identity Services (GSI) direct authorization fallback...');
-        const token = await requestGsiToken();
-        if (token) {
-          cachedAccessToken = token;
-          const profile = await fetchGoogleUserProfile(token);
-          customUser = profile;
-          return { user: profile as any, accessToken: token };
-        }
-
-        // If both failed, provide informative error
-        if (isUnauthorizedDomain) {
-          const currentDomain = typeof window !== 'undefined' ? window.location.hostname : 'your-vercel-domain';
-          throw new Error(
-            `Vercel Domain (${currentDomain}) is not authorized in Firebase Auth.\n\n` +
-            `Fix options:\n` +
-            `1. In Firebase Console > Authentication > Settings > Authorized domains, add "${currentDomain}".\n` +
-            `2. Or enter a Google OAuth Client ID or paste your OAuth token below.`
-          );
-        }
-
-        throw firebaseErr;
+    // If a custom client ID is provided or useGsiOnly requested, use GSI directly
+    if (options?.useGsiOnly || customCid) {
+      const token = await requestGsiToken(customCid);
+      if (token) {
+        cachedAccessToken = token;
+        const profile = await fetchGoogleUserProfile(token);
+        customUser = profile;
+        setManualAccessToken(token, profile);
+        return { user: profile as any, accessToken: token };
       }
     }
 
-    // Direct GSI token request
-    const token = await requestGsiToken();
-    if (token) {
-      cachedAccessToken = token;
-      const profile = await fetchGoogleUserProfile(token);
-      customUser = profile;
-      return { user: profile as any, accessToken: token };
+    // Standard Firebase popup sign-in (for development or authorized domains)
+    try {
+      const result = await signInWithPopup(auth, provider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+
+      if (credential?.accessToken) {
+        cachedAccessToken = credential.accessToken;
+        setManualAccessToken(credential.accessToken, {
+          displayName: result.user.displayName || result.user.email || 'YouTube User',
+          email: result.user.email || '',
+          photoURL: result.user.photoURL || '',
+        });
+        return { user: result.user, accessToken: cachedAccessToken };
+      }
+    } catch (firebaseErr: any) {
+      console.warn('Firebase popup sign-in encountered an error:', firebaseErr?.code || firebaseErr);
+
+      if (firebaseErr?.code === 'auth/popup-closed-by-user') {
+        throw new Error('Sign-in window was closed before completing. If you saw "Access blocked: Authorization Error", please use the OAuth Token method.');
+      }
+
+      // Try GSI directly if client ID is available
+      const token = await requestGsiToken(customCid);
+      if (token) {
+        cachedAccessToken = token;
+        const profile = await fetchGoogleUserProfile(token);
+        customUser = profile;
+        setManualAccessToken(token, profile);
+        return { user: profile as any, accessToken: token };
+      }
+
+      throw firebaseErr;
     }
 
     if (!cachedAccessToken) {
@@ -214,18 +263,45 @@ export const requestGsiToken = (customClientId?: string): Promise<string> => {
   });
 };
 
-export const setManualAccessToken = (token: string) => {
-  cachedAccessToken = token.trim();
-  if (!customUser && cachedAccessToken) {
+export const setManualAccessToken = (
+  token: string,
+  userProfile?: { displayName?: string; email?: string; photoURL?: string },
+) => {
+  const clean = token.trim();
+  cachedAccessToken = clean || null;
+
+  if (clean) {
     customUser = {
-      displayName: 'Connected via OAuth Token',
-      email: '',
+      displayName: userProfile?.displayName || customUser?.displayName || 'Connected via YouTube Token',
+      email: userProfile?.email || customUser?.email || '',
+      photoURL: userProfile?.photoURL || customUser?.photoURL || '',
       uid: 'manual-token-user',
     };
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(STORAGE_TOKEN_KEY, clean);
+        sessionStorage.setItem(STORAGE_TOKEN_KEY, clean);
+        localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(customUser));
+      } catch (e) {}
+    }
+  } else {
+    customUser = null;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_TOKEN_KEY);
+        sessionStorage.removeItem(STORAGE_TOKEN_KEY);
+        localStorage.removeItem(STORAGE_USER_KEY);
+      } catch (e) {}
+    }
   }
 };
 
 export const getAccessToken = (): string | null => {
+  if (!cachedAccessToken && typeof window !== 'undefined') {
+    try {
+      cachedAccessToken = localStorage.getItem(STORAGE_TOKEN_KEY) || sessionStorage.getItem(STORAGE_TOKEN_KEY) || null;
+    } catch (e) {}
+  }
   return cachedAccessToken;
 };
 
@@ -237,4 +313,11 @@ export const logout = async () => {
   }
   cachedAccessToken = null;
   customUser = null;
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem(STORAGE_TOKEN_KEY);
+      sessionStorage.removeItem(STORAGE_TOKEN_KEY);
+      localStorage.removeItem(STORAGE_USER_KEY);
+    } catch (e) {}
+  }
 };

@@ -112,12 +112,17 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* YouTube Auth Status */}
           {user ? (
             <div className="flex items-center gap-2 bg-slate-800/90 border border-slate-700 px-2.5 py-1.5 rounded-lg text-xs">
-              <div className="flex items-center gap-1.5 text-emerald-400 font-medium">
-                <CheckCircle2 className="w-3.5 h-3.5" />
+              <button
+                type="button"
+                onClick={onSignIn}
+                className="flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 font-medium cursor-pointer transition"
+                title="View or manage YouTube connection"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                 <span className="truncate max-w-[120px]" title={channelTitle || user.email || 'YouTube'}>
                   {channelTitle || user.displayName || user.email?.split('@')[0]}
                 </span>
-              </div>
+              </button>
               <button
                 id="sign-out-btn"
                 onClick={onSignOut}

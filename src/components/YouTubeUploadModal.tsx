@@ -26,6 +26,7 @@ interface YouTubeUploadModalProps {
   onSignIn: (options?: { useGsiOnly?: boolean; clientId?: string }) => Promise<void> | void;
   authError?: string | null;
   onClearAuthError?: () => void;
+  onOpenAuthModal?: () => void;
 }
 
 export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
@@ -37,6 +38,7 @@ export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
   onSignIn,
   authError,
   onClearAuthError,
+  onOpenAuthModal,
 }) => {
   const [title, setTitle] = useState(
     isShorts
@@ -374,6 +376,17 @@ export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
                     </div>
                   )}
 
+                  {/* Primary Connection Assistant Button */}
+                  {onOpenAuthModal && (
+                    <button
+                      onClick={onOpenAuthModal}
+                      className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-md transition"
+                    >
+                      <Youtube className="w-4 h-4" />
+                      Connect YouTube Channel (Setup Assistant)
+                    </button>
+                  )}
+
                   {/* Option 1: Standard Firebase Sign in with Google */}
                   <button
                     disabled={isSigningIn}
@@ -385,7 +398,7 @@ export const YouTubeUploadModal: React.FC<YouTubeUploadModalProps> = ({
                         setIsSigningIn(false);
                       }
                     }}
-                    className="w-full flex items-center justify-center gap-2 bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-900 px-4 py-2.5 rounded-xl text-xs font-bold shadow transition"
+                    className="w-full flex items-center justify-center gap-2 bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-900 px-4 py-2 rounded-xl text-xs font-bold shadow transition"
                   >
                     <Youtube className="w-4 h-4 text-red-600" />
                     {isSigningIn ? 'Opening Google Sign-in...' : 'Sign in with Google (Standard)'}

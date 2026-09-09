@@ -12,6 +12,7 @@ import { OverlayControls } from './components/OverlayControls';
 import { ClipEditorModal } from './components/ClipEditorModal';
 import { ExportModal } from './components/ExportModal';
 import { YouTubeUploadModal } from './components/YouTubeUploadModal';
+import { YouTubeAuthModal } from './components/YouTubeAuthModal';
 import { generateSampleHockeyClips } from './lib/sampleClips';
 import { exportCombinedVideo } from './lib/videoRenderer';
 import { initAuth, googleSignIn, logout, getAccessToken } from './lib/firebase';
@@ -64,6 +65,7 @@ export default function App() {
 
   // YouTube Upload Modal State
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   // Google User / Auth
   const [user, setUser] = useState<User | null>(null);
@@ -364,7 +366,7 @@ export default function App() {
         onAspectRatioChange={setAspectRatio}
         user={user}
         channelTitle={channelTitle}
-        onSignIn={handleSignIn}
+        onSignIn={() => setIsAuthModalOpen(true)}
         onSignOut={handleSignOut}
         onExport={handleExport}
         onOpenUpload={handleOpenUpload}
@@ -481,9 +483,25 @@ export default function App() {
           videoBlob={exportedBlob}
           isShorts={aspectRatio === '9:16'}
           user={user}
-          onSignIn={handleSignIn}
+          onSignIn={() => setIsAuthModalOpen(true)}
           authError={authError}
           onClearAuthError={() => setAuthError(null)}
+          onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        />
+      )}
+
+      {/* Dedicated YouTube Auth & Connection Modal */}
+      {isAuthModalOpen && (
+        <YouTubeAuthModal
+          isOpen={isAuthModalOpen}
+          onClose={() => setIsAuthModalOpen(false)}
+          user={user}
+          onAuthSuccess={(authedUser) => {
+            setUser(authedUser);
+            if (authedUser.displayName) setChannelTitle(authedUser.displayName);
+            setIsAuthModalOpen(false);
+          }}
+          onSignOut={handleSignOut}
         />
       )}
     </div>
