@@ -1,0 +1,6 @@
+{
+  "name": "Hockey Highlights Video Editor",
+  "description": "Create hockey highlight shortcuts by combining video clips with smooth transitions and uploading them directly to YouTube.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
