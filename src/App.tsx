@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AspectRatio, HockeyOverlaySettings, Transition, VideoClip } from './types';
+import { AspectRatio, ExportOptions, HockeyOverlaySettings, Transition, VideoClip } from './types';
 import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
 import { Timeline } from './components/Timeline';
@@ -47,6 +47,16 @@ export default function App() {
       actionText: 'Top Shelf Laser Snapper 🚨',
     },
     goalHornSound: true,
+    hornConfig: {
+      enabled: true,
+      useCustomHorn: false,
+      triggerMode: 'every_clip',
+      clipOffsetSeconds: 0.5,
+      volume: 1.0,
+      hornDuration: 5.0,
+      skipClipsWithNativeHorn: true,
+      duckVideoAudio: true,
+    },
     redSirenFlash: true,
     showStamps: true,
   });
@@ -62,6 +72,10 @@ export default function App() {
   const [isExportCompleted, setIsExportCompleted] = useState(false);
   const [exportedBlob, setExportedBlob] = useState<Blob | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportOptions, setExportOptions] = useState<ExportOptions>({
+    qualityPreset: 'source',
+    fps: 60,
+  });
 
   // YouTube Upload Modal State
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -147,7 +161,7 @@ export default function App() {
   // Helper to extract duration and thumbnail reliably from user video files
   const processVideoFile = async (file: File): Promise<VideoClip> => {
     const url = URL.createObjectURL(file);
-    const { duration, thumbnailUrl } = await extractVideoMetadata(file);
+    const { duration, thumbnailUrl, width, height } = await extractVideoMetadata(file);
     const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
 
     // Detect default tag
@@ -168,6 +182,8 @@ export default function App() {
       originalDuration: safeDuration,
       startTime: 0,
       endTime: safeDuration,
+      originalWidth: width,
+      originalHeight: height,
       volume: 1.0,
       playbackRate: 1.0,
       thumbnailUrl,
@@ -276,15 +292,17 @@ export default function App() {
     setIsClipEditorOpen(true);
   };
 
-  // Export Combined Video Sequence
-  const handleExport = async (): Promise<Blob | null> => {
+  // Export Combined Video Sequence with Original Source Quality
+  const handleExport = async (overrideOptions?: ExportOptions): Promise<Blob | null> => {
     if (clips.length === 0) return null;
+
+    const activeOptions = overrideOptions || exportOptions;
 
     try {
       setIsExporting(true);
       setIsExportCompleted(false);
       setExportProgress(5);
-      setExportStatusText('Initializing video stitcher...');
+      setExportStatusText('Analyzing source clips & preparing full-quality timeline...');
       setIsExportModalOpen(true);
 
       const blob = await exportCombinedVideo(
@@ -296,6 +314,7 @@ export default function App() {
           setExportProgress(percent);
           setExportStatusText(status);
         },
+        activeOptions,
       );
 
       setExportedBlob(blob);
@@ -400,6 +419,8 @@ export default function App() {
               }}
               currentTime={currentTime}
               onTimeUpdate={setCurrentTime}
+              onUpdateClip={handleUpdateClip}
+              selectedClipIndex={selectedClipIndex}
             />
           </div>
 
@@ -408,6 +429,10 @@ export default function App() {
             <OverlayControls
               settings={overlaySettings}
               onChange={setOverlaySettings}
+              clips={clips}
+              selectedClipIndex={selectedClipIndex}
+              onSelectClipIndex={setSelectedClipIndex}
+              onUpdateClip={handleUpdateClip}
             />
 
             {/* Quick Tips & YouTube Shortcuts Guide */}
@@ -459,6 +484,9 @@ export default function App() {
               handleUpdateClip(selectedClipIndex, updated);
             }
           }}
+          hornConfig={overlaySettings.hornConfig}
+          goalHornSound={overlaySettings.goalHornSound}
+          overlaySettings={overlaySettings}
         />
       )}
 
@@ -472,6 +500,11 @@ export default function App() {
           isCompleted={isExportCompleted}
           exportedBlob={exportedBlob}
           onProceedToYouTube={() => setIsUploadModalOpen(true)}
+          exportOptions={exportOptions}
+          onUpdateOptions={(opts) => setExportOptions(opts)}
+          onReExport={(opts) => handleExport(opts)}
+          clips={clips}
+          aspectRatio={aspectRatio}
         />
       )}
 

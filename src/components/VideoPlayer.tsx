@@ -7,6 +7,7 @@ import {
   preloadVideo,
   renderTransitionEffect,
 } from '../lib/videoRenderer';
+import { playHornSound } from '../lib/audio';
 import {
   Play,
   Pause,
@@ -16,6 +17,9 @@ import {
   Maximize2,
   Sparkles,
   Plus,
+  ZoomIn,
+  ZoomOut,
+  Crosshair,
 } from 'lucide-react';
 
 interface VideoPlayerProps {
@@ -27,6 +31,8 @@ interface VideoPlayerProps {
   onOpenUploadDialog: () => void;
   currentTime: number;
   onTimeUpdate: (time: number) => void;
+  onUpdateClip?: (index: number, updated: VideoClip) => void;
+  selectedClipIndex?: number | null;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -38,14 +44,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onOpenUploadDialog,
   currentTime,
   onTimeUpdate,
+  onUpdateClip,
+  selectedClipIndex,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoElementsRef = useRef<HTMLVideoElement[]>([]);
   const animationFrameRef = useRef<number | null>(null);
   const lastTimestampRef = useRef<number | null>(null);
+  const playedHornClipIndicesRef = useRef<Set<number>>(new Set());
+  const activeHornStopRef = useRef<(() => void) | null>(null);
+  const isDuckingAudioRef = useRef<boolean>(false);
+  const currentTimeRef = useRef<number>(currentTime);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
 
   const { segments, totalDuration } = calculateTimeline(clips, transitions);
 
@@ -62,7 +78,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const elements: HTMLVideoElement[] = [];
       for (const clip of clips) {
         try {
-          const v = await preloadVideo(clip.url);
+          let activeUrl = clip.url;
+          if (clip.blob instanceof Blob && (!activeUrl || activeUrl.startsWith('blob:'))) {
+            try {
+              activeUrl = URL.createObjectURL(clip.blob);
+              clip.url = activeUrl;
+            } catch {}
+          }
+          const v = await preloadVideo(activeUrl, clip.blob);
           v.volume = isMuted ? 0 : clip.volume;
           elements.push(v);
         } catch (err) {
@@ -131,6 +154,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           video.currentTime = videoCurrentTime;
         }
 
+        if (isPlaying && !isMuted) {
+          const baseVol = clip.volume ?? 1.0;
+          const vol = isDuckingAudioRef.current ? baseVol * 0.15 : baseVol;
+          if (video.volume !== vol) video.volume = vol;
+          if (video.muted) video.muted = false;
+          if (video.paused) {
+            video.play().catch(() => {});
+          }
+        } else {
+          if (!video.paused) video.pause();
+        }
+
+        // Pause all other video elements to prevent background audio leaks
+        videoElementsRef.current.forEach((v, idx) => {
+          if (idx !== activeIndex && !v.paused) {
+            try {
+              v.pause();
+            } catch {}
+          }
+        });
+
         // Check if currently inside transition with next clip
         if (
           seg.transitionWithNext &&
@@ -154,12 +198,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               transProgress,
               width,
               height,
+              clip,
+              nextClip,
             );
           } else {
-            drawVideoFitted(ctx, video, width, height);
+            drawVideoFitted(
+              ctx,
+              video,
+              width,
+              height,
+              clip.zoom ?? 1,
+              clip.panX ?? 0,
+              clip.panY ?? 0,
+            );
           }
         } else {
-          drawVideoFitted(ctx, video, width, height);
+          drawVideoFitted(
+            ctx,
+            video,
+            width,
+            height,
+            clip.zoom ?? 1,
+            clip.panX ?? 0,
+            clip.panY ?? 0,
+          );
         }
       } else {
         // Video loading or placeholder
@@ -177,6 +239,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     if (!isPlaying) {
       lastTimestampRef.current = null;
+      if (activeHornStopRef.current) {
+        activeHornStopRef.current();
+        activeHornStopRef.current = null;
+      }
+      isDuckingAudioRef.current = false;
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
@@ -187,16 +254,81 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (lastTimestampRef.current === null) {
         lastTimestampRef.current = timestamp;
       }
-      const delta = (timestamp - lastTimestampRef.current) / 1000;
+      const rawDelta = (timestamp - lastTimestampRef.current) / 1000;
+      const delta = Math.min(rawDelta, 0.1); // Guard against giant delta jumps
       lastTimestampRef.current = timestamp;
 
-      let nextTime = currentTime + delta;
+      let nextTime = currentTimeRef.current + delta;
       if (nextTime >= totalDuration) {
-        nextTime = 0; // Loop or stop
+        currentTimeRef.current = 0;
         setIsPlaying(false);
+        lastTimestampRef.current = null;
+        if (activeHornStopRef.current) {
+          activeHornStopRef.current();
+          activeHornStopRef.current = null;
+        }
+        isDuckingAudioRef.current = false;
         onTimeUpdate(0);
         renderAtTime(0);
+        playedHornClipIndicesRef.current.clear();
         return;
+      }
+
+      currentTimeRef.current = nextTime;
+
+      // Check for horn trigger in active clip
+      const hornCfg = overlaySettings.hornConfig || {
+        enabled: overlaySettings.goalHornSound,
+        useCustomHorn: false,
+        triggerMode: 'every_clip' as const,
+        clipOffsetSeconds: 0.5,
+        volume: 1.0,
+        hornDuration: 5.0,
+        skipClipsWithNativeHorn: true,
+        duckVideoAudio: true,
+      };
+
+      const hornEnabled = overlaySettings.goalHornSound && (hornCfg.enabled ?? true);
+      if (hornEnabled && !isMuted) {
+        const activeIdx = segments.findIndex(
+          (seg) => nextTime >= seg.clipStartInTimeline && nextTime <= seg.clipEndInTimeline,
+        );
+        if (activeIdx !== -1) {
+          const activeSeg = segments[activeIdx];
+          const activeClip = activeSeg.clip;
+
+          // Check native horn conflict prevention
+          const hasNative = Boolean(activeClip.hasNativeHorn);
+          const skipBecauseNative = hasNative && (hornCfg.skipClipsWithNativeHorn !== false);
+          const isEligible = !activeClip.hornDisabled && !skipBecauseNative;
+
+          if (isEligible && !playedHornClipIndicesRef.current.has(activeIdx)) {
+            const isGoal = activeClip.tag === 'GOAL';
+            const shouldTrigger = hornCfg.triggerMode === 'every_clip' || isGoal;
+
+            if (shouldTrigger) {
+              const rawOffset = activeClip.hornTimingOverride ?? hornCfg.clipOffsetSeconds ?? 0.5;
+              const triggerOffset = Math.max(0, rawOffset) / (activeClip.playbackRate || 1.0);
+
+              if (nextTime >= activeSeg.clipStartInTimeline + triggerOffset) {
+                playedHornClipIndicesRef.current.add(activeIdx);
+
+                // Duck native video background audio if enabled
+                if (hornCfg.duckVideoAudio) {
+                  isDuckingAudioRef.current = true;
+                  const dur = hornCfg.hornDuration ?? hornCfg.customHornDuration ?? 5.0;
+                  setTimeout(() => {
+                    isDuckingAudioRef.current = false;
+                  }, dur * 1000);
+                }
+
+                playHornSound(hornCfg).then(({ stop }) => {
+                  activeHornStopRef.current = stop;
+                });
+              }
+            }
+          }
+        }
       }
 
       onTimeUpdate(nextTime);
@@ -207,11 +339,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     animationFrameRef.current = requestAnimationFrame(step);
 
     return () => {
+      lastTimestampRef.current = null;
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isPlaying, currentTime, totalDuration, onTimeUpdate, renderAtTime]);
+  }, [isPlaying, totalDuration, onTimeUpdate, renderAtTime, overlaySettings, segments, isMuted]);
 
   // Initial and seek re-render
   useEffect(() => {
@@ -222,19 +355,54 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const togglePlay = () => {
     if (clips.length === 0) return;
-    if (currentTime >= totalDuration) {
+    if (currentTimeRef.current >= totalDuration) {
+      currentTimeRef.current = 0;
       onTimeUpdate(0);
+      playedHornClipIndicesRef.current.clear();
     }
+    if (isPlaying && activeHornStopRef.current) {
+      activeHornStopRef.current();
+      activeHornStopRef.current = null;
+    }
+    isDuckingAudioRef.current = false;
+    lastTimestampRef.current = null;
     setIsPlaying(!isPlaying);
   };
 
   const handleRestart = () => {
+    if (activeHornStopRef.current) {
+      activeHornStopRef.current();
+      activeHornStopRef.current = null;
+    }
+    isDuckingAudioRef.current = false;
+    lastTimestampRef.current = null;
+    playedHornClipIndicesRef.current.clear();
+    currentTimeRef.current = 0;
     onTimeUpdate(0);
     renderAtTime(0);
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
+    if (activeHornStopRef.current) {
+      activeHornStopRef.current();
+      activeHornStopRef.current = null;
+    }
+    isDuckingAudioRef.current = false;
+    lastTimestampRef.current = null;
+    playedHornClipIndicesRef.current.clear();
+
+    // Mark clips whose horn trigger timestamp has already elapsed as played
+    segments.forEach((seg, idx) => {
+      const rawOffset =
+        seg.clip.hornTimingOverride ?? overlaySettings.hornConfig?.clipOffsetSeconds ?? 0.5;
+      const triggerOffset = Math.max(0, rawOffset) / (seg.clip.playbackRate || 1.0);
+      if (val > seg.clipStartInTimeline + triggerOffset) {
+        playedHornClipIndicesRef.current.add(idx);
+      }
+    });
+
+    currentTimeRef.current = val;
     onTimeUpdate(val);
     renderAtTime(val);
   };
@@ -245,6 +413,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const s = Math.floor(secs % 60);
     const ms = Math.floor((secs % 1) * 10);
     return `${m}:${s < 10 ? '0' : ''}${s}.${ms}`;
+  };
+
+  // Find which clip is active at currentTime (or user selected)
+  const activeClipIndex = React.useMemo(() => {
+    if (clips.length === 0) return -1;
+    if (selectedClipIndex !== null && selectedClipIndex !== undefined && selectedClipIndex >= 0 && selectedClipIndex < clips.length) {
+      return selectedClipIndex;
+    }
+    const idx = segments.findIndex(
+      (seg) => currentTime >= seg.clipStartInTimeline && currentTime <= seg.clipEndInTimeline
+    );
+    return idx !== -1 ? idx : 0;
+  }, [clips.length, selectedClipIndex, segments, currentTime]);
+
+  const activeClip = activeClipIndex !== -1 ? clips[activeClipIndex] : null;
+
+  const handleClipZoomChange = (newZoom: number) => {
+    if (!activeClip || activeClipIndex === -1 || !onUpdateClip) return;
+    const clampedZoom = Math.max(1.0, Math.min(3.5, Number(newZoom.toFixed(2))));
+    onUpdateClip(activeClipIndex, {
+      ...activeClip,
+      zoom: clampedZoom,
+    });
+    requestAnimationFrame(() => renderAtTime(currentTime));
+  };
+
+  const handleClipPanChange = (pX: number, pY: number) => {
+    if (!activeClip || activeClipIndex === -1 || !onUpdateClip) return;
+    onUpdateClip(activeClipIndex, {
+      ...activeClip,
+      panX: pX,
+      panY: pY,
+    });
+    requestAnimationFrame(() => renderAtTime(currentTime));
   };
 
   // Dimensions for canvas
@@ -390,6 +592,151 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </span>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Zoom Feature Directly Below Video */}
+      {clips.length > 0 && activeClip && onUpdateClip && (
+        <div className="w-full max-w-3xl mt-2.5 bg-slate-900/95 border border-slate-800/90 rounded-xl p-3 flex flex-col gap-2.5 shadow-lg shadow-black/40">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <ZoomIn className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="text-xs font-bold text-white uppercase tracking-wider font-['Chakra_Petch']">
+                Clip Zoom &amp; Framing
+              </span>
+              <span
+                className="text-[11px] font-mono text-slate-300 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 truncate max-w-[150px]"
+                title={activeClip.name}
+              >
+                {activeClip.name}
+              </span>
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded font-bold border ${
+                  (activeClip.zoom ?? 1) > 1.02
+                    ? 'bg-amber-950/90 text-amber-300 border-amber-700/80'
+                    : 'bg-slate-950 text-slate-400 border-slate-800'
+                }`}
+              >
+                {(activeClip.zoom ?? 1) > 1.02
+                  ? `${(activeClip.zoom ?? 1).toFixed(2)}x Zoomed`
+                  : '1.0x Full Ice'}
+              </span>
+            </div>
+
+            {((activeClip.zoom ?? 1) > 1.02 ||
+              (activeClip.panX ?? 0) !== 0 ||
+              (activeClip.panY ?? 0) !== 0) && (
+              <button
+                type="button"
+                onClick={() => {
+                  handleClipZoomChange(1.0);
+                  handleClipPanChange(0, 0);
+                }}
+                className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-white bg-slate-950 hover:bg-slate-800 px-2.5 py-1 rounded border border-slate-800 transition"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Reset Framing
+              </button>
+            )}
+          </div>
+
+          {/* Slider & Presets Row */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+            <div className="flex items-center gap-2 flex-1">
+              <button
+                type="button"
+                title="Zoom Out (-0.2x)"
+                onClick={() =>
+                  handleClipZoomChange(Math.max(1.0, (activeClip.zoom ?? 1) - 0.2))
+                }
+                className="p-1.5 rounded bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 transition"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <input
+                type="range"
+                min={1.0}
+                max={3.5}
+                step={0.05}
+                value={activeClip.zoom ?? 1.0}
+                onChange={(e) => handleClipZoomChange(parseFloat(e.target.value) || 1.0)}
+                className="flex-1 h-2 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-amber-500"
+              />
+              <button
+                type="button"
+                title="Zoom In (+0.2x)"
+                onClick={() =>
+                  handleClipZoomChange(Math.min(3.5, (activeClip.zoom ?? 1) + 0.2))
+                }
+                className="p-1.5 rounded bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 transition"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+              <span className="font-mono text-xs text-amber-400 font-bold bg-slate-950 px-2 py-0.5 rounded border border-slate-800 min-w-[54px] text-center">
+                {(activeClip.zoom ?? 1.0).toFixed(2)}x
+              </span>
+            </div>
+
+            {/* Quick Magnification Presets */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {[
+                { label: '1.0x Full Ice', val: 1.0 },
+                { label: '1.25x Wide', val: 1.25 },
+                { label: '1.5x Action', val: 1.5 },
+                { label: '2.0x Tight', val: 2.0 },
+                { label: '2.5x Close', val: 2.5 },
+              ].map((p) => (
+                <button
+                  key={p.val}
+                  type="button"
+                  onClick={() => handleClipZoomChange(p.val)}
+                  className={`text-[11px] px-2 py-0.5 rounded font-mono border transition ${
+                    Math.abs((activeClip.zoom ?? 1) - p.val) < 0.04
+                      ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Quick Framing / Pan buttons when zoomed */}
+          {(activeClip.zoom ?? 1) > 1.02 && (
+            <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                <Crosshair className="w-3.5 h-3.5 text-sky-400" />
+                <span>Player Focal Point:</span>
+                <span className="font-mono text-[10px] text-sky-400 font-bold">
+                  {activeClip.panX ?? 0 > 0 ? `+${activeClip.panX}` : activeClip.panX ?? 0}% X /{' '}
+                  {activeClip.panY ?? 0 > 0 ? `+${activeClip.panY}` : activeClip.panY ?? 0}% Y
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                {[
+                  { label: 'Left Wing', x: -60, y: 0 },
+                  { label: 'Far Boards', x: 0, y: -50 },
+                  { label: 'Center Ice', x: 0, y: 0 },
+                  { label: 'Near Net', x: 0, y: 55 },
+                  { label: 'Right Wing', x: 60, y: 0 },
+                ].map((f) => (
+                  <button
+                    key={f.label}
+                    type="button"
+                    onClick={() => handleClipPanChange(f.x, f.y)}
+                    className={`text-[10px] px-2 py-0.5 rounded border transition ${
+                      (activeClip.panX ?? 0) === f.x && (activeClip.panY ?? 0) === f.y
+                        ? 'bg-sky-500/20 border-sky-500 text-sky-300 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

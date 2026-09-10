@@ -310,5 +310,56 @@ export async function generateSampleHockeyClips(aspectRatio: '9:16' | '16:9' = '
     createSyntheticHockeyVideo('3. Overtime Slapshot Winner', 'ot', 3.4, aspectRatio),
   ]);
 
+  clip1.useCustomOverlays = true;
+  clip1.scorebugOverride = {
+    enabled: true,
+    awayTeam: 'BOS',
+    homeTeam: 'NYR',
+    awayScore: 0,
+    homeScore: 1,
+    period: '1ST',
+    timeRemaining: '0:18',
+  };
+  clip1.playerBannerOverride = {
+    enabled: true,
+    jerseyNumber: '97',
+    playerName: 'Connor McDavid',
+    actionText: 'Top Shelf Laser Snapper 🚨',
+  };
+
+  clip2.useCustomOverlays = true;
+  clip2.scorebugOverride = {
+    enabled: true,
+    awayTeam: 'BOS',
+    homeTeam: 'NYR',
+    awayScore: 1,
+    homeScore: 1,
+    period: '2ND',
+    timeRemaining: '14:22',
+  };
+  clip2.playerBannerOverride = {
+    enabled: true,
+    jerseyNumber: '31',
+    playerName: 'Igor Shesterkin',
+    actionText: 'Robbery with the Glove 🧤',
+  };
+
+  clip3.useCustomOverlays = true;
+  clip3.scorebugOverride = {
+    enabled: true,
+    awayTeam: 'BOS',
+    homeTeam: 'NYR',
+    awayScore: 3,
+    homeScore: 2,
+    period: 'OT',
+    timeRemaining: '0:45',
+  };
+  clip3.playerBannerOverride = {
+    enabled: true,
+    jerseyNumber: '88',
+    playerName: 'David Pastrňák',
+    actionText: 'OT Slapshot Rocket 🚨',
+  };
+
   return [clip1, clip2, clip3];
 }

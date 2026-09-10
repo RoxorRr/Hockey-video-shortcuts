@@ -7,6 +7,8 @@
 export interface VideoMetadataResult {
   duration: number;
   thumbnailUrl: string;
+  width?: number;
+  height?: number;
 }
 
 export function extractVideoMetadata(file: File): Promise<VideoMetadataResult> {
@@ -74,6 +76,8 @@ export function extractVideoMetadata(file: File): Promise<VideoMetadataResult> {
       resolve({
         duration: safeDuration,
         thumbnailUrl,
+        width: video.videoWidth > 0 ? video.videoWidth : undefined,
+        height: video.videoHeight > 0 ? video.videoHeight : undefined,
       });
     };
 

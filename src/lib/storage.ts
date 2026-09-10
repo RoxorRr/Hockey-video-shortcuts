@@ -23,6 +23,15 @@ interface SerializedClip {
   thumbnailUrl?: string;
   tag?: VideoClip['tag'];
   customTagText?: string;
+  hornTimingOverride?: number;
+  hornDisabled?: boolean;
+  hasNativeHorn?: boolean;
+  zoom?: number;
+  panX?: number;
+  panY?: number;
+  useCustomOverlays?: boolean;
+  scorebugOverride?: VideoClip['scorebugOverride'];
+  playerBannerOverride?: VideoClip['playerBannerOverride'];
 }
 
 export interface SavedProjectData {
@@ -76,11 +85,22 @@ export async function saveProjectToStorage(
         originalDuration: origDur,
         startTime: startT,
         endTime: endT,
+        originalWidth: c.originalWidth,
+        originalHeight: c.originalHeight,
         volume: Number.isFinite(c.volume) ? c.volume : 1,
         playbackRate: Number.isFinite(c.playbackRate) && c.playbackRate > 0 ? c.playbackRate : 1,
         thumbnailUrl: c.thumbnailUrl,
         tag: c.tag,
         customTagText: c.customTagText,
+        hornTimingOverride: c.hornTimingOverride,
+        hornDisabled: c.hornDisabled,
+        hasNativeHorn: c.hasNativeHorn,
+        zoom: c.zoom,
+        panX: c.panX,
+        panY: c.panY,
+        useCustomOverlays: c.useCustomOverlays,
+        scorebugOverride: c.scorebugOverride,
+        playerBannerOverride: c.playerBannerOverride,
       };
     });
 
@@ -142,14 +162,48 @@ export async function loadProjectFromStorage(): Promise<{
               startTime: startT,
               endTime: endT,
               playbackRate: Number.isFinite(sc.playbackRate) && sc.playbackRate > 0 ? sc.playbackRate : 1.0,
+              hornTimingOverride: sc.hornTimingOverride,
+              hornDisabled: sc.hornDisabled,
+              hasNativeHorn: sc.hasNativeHorn,
+              zoom: sc.zoom,
+              panX: sc.panX,
+              panY: sc.panY,
             });
+          }
+        }
+
+        // Revive custom horn object URL if a custom horn blob was saved
+        let revivedOverlaySettings = data.overlaySettings;
+        if (revivedOverlaySettings?.hornConfig) {
+          if (revivedOverlaySettings.hornConfig.customHornBlob) {
+            try {
+              const hornUrl = URL.createObjectURL(revivedOverlaySettings.hornConfig.customHornBlob);
+              revivedOverlaySettings = {
+                ...revivedOverlaySettings,
+                hornConfig: {
+                  ...revivedOverlaySettings.hornConfig,
+                  customHornUrl: hornUrl,
+                },
+              };
+            } catch (e) {
+              console.warn('Could not revive custom horn URL:', e);
+            }
+          } else if (revivedOverlaySettings.hornConfig.customHornUrl?.startsWith('blob:')) {
+            // Revoked/dead blob URL from previous browser session
+            revivedOverlaySettings = {
+              ...revivedOverlaySettings,
+              hornConfig: {
+                ...revivedOverlaySettings.hornConfig,
+                customHornUrl: undefined,
+              },
+            };
           }
         }
 
         resolve({
           clips: revivedClips,
           transitions: data.transitions || [],
-          overlaySettings: data.overlaySettings,
+          overlaySettings: revivedOverlaySettings,
           aspectRatio: data.aspectRatio,
         });
       };

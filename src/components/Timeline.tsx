@@ -13,6 +13,8 @@ import {
   Flame,
   Maximize,
   Tv,
+  ZoomIn,
+  Shield,
 } from 'lucide-react';
 import { playTransitionWhoosh } from '../lib/audio';
 
@@ -152,6 +154,17 @@ export const Timeline: React.FC<TimelineProps> = ({
                         </span>
                       )}
 
+                      {/* Zoom badge if clip has zoom > 1.05 */}
+                      {clip.zoom && clip.zoom > 1.05 && (
+                        <span
+                          className="absolute top-1.5 right-1.5 bg-amber-500 text-slate-950 font-black text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 shadow-md shadow-black/50"
+                          title={`Clip zoomed to ${clip.zoom.toFixed(1)}x magnification`}
+                        >
+                          <ZoomIn className="w-2.5 h-2.5 stroke-[2.5]" />
+                          {clip.zoom.toFixed(1)}x
+                        </span>
+                      )}
+
                       {/* Duration stamp */}
                       <span className="absolute bottom-1.5 right-1.5 bg-black/80 backdrop-blur-xs text-[10px] font-mono text-slate-200 px-1.5 py-0.5 rounded">
                         {trimmedDuration.toFixed(1)}s
@@ -159,7 +172,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                     </div>
 
                     {/* Clip Info */}
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center justify-between mb-1">
                       <h4
                         className="text-xs font-semibold text-white truncate max-w-[130px]"
                         title={clip.name}
@@ -170,6 +183,20 @@ export const Timeline: React.FC<TimelineProps> = ({
                         {clip.playbackRate !== 1 ? `${clip.playbackRate}x` : ''}
                       </span>
                     </div>
+
+                    {/* Custom Overlay Tag if active */}
+                    {clip.useCustomOverlays && (
+                      <div
+                        className="flex items-center gap-1 text-[10px] text-sky-300 font-medium mb-1.5 truncate bg-sky-950/60 border border-sky-800/60 px-1.5 py-0.5 rounded"
+                        title={`Player: ${clip.playerBannerOverride?.playerName || 'Custom'} (${clip.scorebugOverride?.awayScore ?? 0}-${clip.scorebugOverride?.homeScore ?? 0})`}
+                      >
+                        <Shield className="w-2.5 h-2.5 text-sky-400 shrink-0" />
+                        <span className="truncate">
+                          {clip.playerBannerOverride?.jerseyNumber ? `#${clip.playerBannerOverride.jerseyNumber} ` : ''}
+                          {clip.playerBannerOverride?.playerName || 'Custom Overlay'}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Action buttons */}
                     <div className="flex items-center justify-between pt-1 border-t border-slate-850">
