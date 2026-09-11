@@ -23,6 +23,13 @@ import {
   Shield,
   User,
   Trophy,
+  Plus,
+  Minus,
+  Copy,
+  Eye,
+  EyeOff,
+  Tv,
+  GripVertical,
 } from 'lucide-react';
 
 interface ClipEditorModalProps {
@@ -94,6 +101,22 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
     actionText: clip?.playerBannerOverride?.actionText || overlaySettings?.playerBanner.actionText || 'Highlight Play',
   }));
 
+  // Live Broadcast Overlays & Goal Siren Preview States
+  const [showOverlaysPreview, setShowOverlaysPreview] = useState(true);
+  const [isHornFiring, setIsHornFiring] = useState(false);
+
+  // Computed live overlays for real-time WYSIWYG preview in the modal
+  const effectiveScorebug: ScorebugConfig = useCustomOverlays
+    ? scorebugOverride
+    : overlaySettings?.scorebug || scorebugOverride;
+
+  const effectivePlayerBanner: PlayerBannerConfig = useCustomOverlays
+    ? playerBannerOverride
+    : overlaySettings?.playerBanner || playerBannerOverride;
+
+  const effectiveTag = tag || clip?.tag;
+  const effectiveTagText = customTagText || (effectiveTag ? effectiveTag : '');
+
   // Audio Playback Refs
   const activeHornStopRef = useRef<(() => void) | null>(null);
   const activeAuditionStopRef = useRef<(() => void) | null>(null);
@@ -106,6 +129,12 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
   const [zoom, setZoom] = useState<number>(clip?.zoom ?? 1.0);
   const [panX, setPanX] = useState<number>(clip?.panX ?? 0);
   const [panY, setPanY] = useState<number>(clip?.panY ?? 0);
+
+  // Interactive direct dragging of the Goal Horn marker on scrubber & timeline
+  const [isDraggingHornMarker, setIsDraggingHornMarker] = useState(false);
+  const [isDraggingTimelineHorn, setIsDraggingTimelineHorn] = useState(false);
+  const scrubberRef = useRef<HTMLDivElement>(null);
+  const timelineBarRef = useRef<HTMLDivElement>(null);
 
   // Pointer drag state for video pan
   const isDraggingRef = useRef(false);
@@ -151,6 +180,7 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
       } catch {}
       activeHornStopRef.current = null;
     }
+    setIsHornFiring(false);
     if (videoRef.current && isDuckedRef.current) {
       videoRef.current.volume = volume;
       isDuckedRef.current = false;
@@ -165,6 +195,7 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
       activeAuditionStopRef.current = null;
     }
     setIsAuditioningHorn(false);
+    setIsHornFiring(false);
   }, []);
 
   const handleModalClose = useCallback(() => {
@@ -277,27 +308,40 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
       if (isEligibleForHorn && shouldTriggerMode && !hornTriggeredRef.current) {
         if (curTime >= targetVideoTimestamp) {
           hornTriggeredRef.current = true;
+          setIsHornFiring(true);
           // Fire goal horn!
           playHornSound(effectiveHornConfig)
             .then(({ stop }) => {
-              activeHornStopRef.current = stop;
+              activeHornStopRef.current = () => {
+                try {
+                  stop();
+                } catch {}
+                setIsHornFiring(false);
+              };
+
+              const durMs =
+                (effectiveHornConfig.hornDuration ??
+                  effectiveHornConfig.customHornDuration ??
+                  5.0) * 1000;
 
               if (effectiveHornConfig.duckVideoAudio && videoRef.current) {
                 videoRef.current.volume = volume * 0.15;
                 isDuckedRef.current = true;
-                const durMs =
-                  (effectiveHornConfig.hornDuration ??
-                    effectiveHornConfig.customHornDuration ??
-                    5.0) * 1000;
                 duckTimeoutRef.current = setTimeout(() => {
+                  setIsHornFiring(false);
                   if (videoRef.current && isDuckedRef.current) {
                     videoRef.current.volume = volume;
                     isDuckedRef.current = false;
                   }
                 }, durMs);
+              } else {
+                duckTimeoutRef.current = setTimeout(() => {
+                  setIsHornFiring(false);
+                }, durMs);
               }
             })
             .catch((err) => {
+              setIsHornFiring(false);
               console.warn('Clip editor horn playback error:', err);
             });
         }
@@ -455,19 +499,120 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
     }
 
     setIsAuditioningHorn(true);
+    setIsHornFiring(true);
     try {
       const { stop } = await playHornSound(effectiveHornConfig);
-      activeAuditionStopRef.current = stop;
+      activeAuditionStopRef.current = () => {
+        try {
+          stop();
+        } catch {}
+        setIsAuditioningHorn(false);
+        setIsHornFiring(false);
+      };
       const durMs =
         (effectiveHornConfig.hornDuration ?? effectiveHornConfig.customHornDuration ?? 5.0) * 1000;
       setTimeout(() => {
         setIsAuditioningHorn(false);
+        setIsHornFiring(false);
         activeAuditionStopRef.current = null;
       }, durMs);
     } catch (err) {
       console.warn('Failed to audition goal horn in modal:', err);
       setIsAuditioningHorn(false);
+      setIsHornFiring(false);
       activeAuditionStopRef.current = null;
+    }
+  };
+
+  // Direct Drag Handlers for Goal Horn Marker on Video Scrubber Track
+  const handleHornScrubberPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    setIsDraggingHornMarker(true);
+    setUseCustomTiming(true);
+
+    const scrubber = scrubberRef.current;
+    if (!scrubber) return;
+
+    const rect = scrubber.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const newOffset = Math.round(ratio * trimmedDuration * 10) / 10;
+    setHornTimingOverride(newOffset);
+    handleSeekPlayhead(newOffset);
+  };
+
+  const handleHornScrubberPointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingHornMarker) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const scrubber = scrubberRef.current;
+    if (!scrubber) return;
+
+    const rect = scrubber.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const newOffset = Math.round(ratio * trimmedDuration * 10) / 10;
+    setHornTimingOverride(newOffset);
+    handleSeekPlayhead(newOffset);
+  };
+
+  const handleHornScrubberPointerUp = (e: React.PointerEvent) => {
+    if (isDraggingHornMarker) {
+      e.stopPropagation();
+      e.preventDefault();
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      setIsDraggingHornMarker(false);
+    }
+  };
+
+  // Direct Drag Handlers for Goal Horn Marker on Multi-track Timeline Bar
+  const handleHornTimelinePointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    setIsDraggingTimelineHorn(true);
+    setUseCustomTiming(true);
+
+    const bar = timelineBarRef.current;
+    if (!bar) return;
+
+    const rect = bar.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const rawTimestamp = ratio * maxDuration;
+    const newOffset = Math.max(0, Math.min(trimmedDuration, Math.round((rawTimestamp - startTime) * 10) / 10));
+    setHornTimingOverride(newOffset);
+    handleSeekPlayhead(newOffset);
+  };
+
+  const handleHornTimelinePointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingTimelineHorn) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const bar = timelineBarRef.current;
+    if (!bar) return;
+
+    const rect = bar.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const rawTimestamp = ratio * maxDuration;
+    const newOffset = Math.max(0, Math.min(trimmedDuration, Math.round((rawTimestamp - startTime) * 10) / 10));
+    setHornTimingOverride(newOffset);
+    handleSeekPlayhead(newOffset);
+  };
+
+  const handleHornTimelinePointerUp = (e: React.PointerEvent) => {
+    if (isDraggingTimelineHorn) {
+      e.stopPropagation();
+      e.preventDefault();
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      setIsDraggingTimelineHorn(false);
     }
   };
 
@@ -561,6 +706,33 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
         </div>
 
         <div className="p-6 max-h-[80vh] overflow-y-auto space-y-6">
+          {/* Broadcast Preview Toolbar */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs text-slate-300 font-bold font-['Chakra_Petch'] uppercase tracking-wider">
+              <Tv className="w-4 h-4 text-sky-400" />
+              <span>Broadcast Video &amp; Overlay Preview</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowOverlaysPreview(!showOverlaysPreview)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border transition shadow cursor-pointer ${
+                  showOverlaysPreview
+                    ? 'bg-sky-950/80 border-sky-500/60 text-sky-300'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+                title="Toggle Hockey Scorebug, Player Lower Third, and Highlight Tag on video preview"
+              >
+                {showOverlaysPreview ? (
+                  <Eye className="w-3.5 h-3.5 text-sky-400" />
+                ) : (
+                  <EyeOff className="w-3.5 h-3.5 text-slate-500" />
+                )}
+                <span>Overlays: {showOverlaysPreview ? 'Visible' : 'Hidden'}</span>
+              </button>
+            </div>
+          </div>
+
           {/* Video Preview with Zoom & Pan */}
           <div
             className={`relative rounded-xl overflow-hidden bg-black aspect-video max-h-56 mx-auto flex items-center justify-center border border-slate-800 select-none ${
@@ -589,10 +761,126 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
               />
             </div>
 
-            {/* Overlay Badges */}
+            {/* LIVE BROADCAST OVERLAYS (WYSIWYG) */}
+            {showOverlaysPreview && (
+              <>
+                {/* 1. Hockey Graphics (Broadcast Scorebug) - Top Left */}
+                {effectiveScorebug.enabled && (
+                  <div className="absolute top-2 left-2 z-20 pointer-events-none bg-slate-950/92 backdrop-blur-md border border-sky-400/50 rounded-lg px-2.5 py-1 shadow-2xl flex items-center gap-2 text-xs font-['Chakra_Petch'] select-none animate-in fade-in duration-100">
+                    {/* Away Team */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-black text-white tracking-wider text-[11px] max-w-[60px] truncate">
+                        {effectiveScorebug.awayTeam || 'AWAY'}
+                      </span>
+                      <span className="bg-sky-500/25 text-sky-300 font-black px-1.5 py-0.5 rounded text-[11px] border border-sky-400/40 min-w-[20px] text-center shadow-xs">
+                        {effectiveScorebug.awayScore ?? 0}
+                      </span>
+                    </div>
+
+                    <span className="text-slate-600 font-bold">|</span>
+
+                    {/* Home Team */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="bg-sky-500/25 text-sky-300 font-black px-1.5 py-0.5 rounded text-[11px] border border-sky-400/40 min-w-[20px] text-center shadow-xs">
+                        {effectiveScorebug.homeScore ?? 0}
+                      </span>
+                      <span className="font-black text-white tracking-wider text-[11px] max-w-[60px] truncate">
+                        {effectiveScorebug.homeTeam || 'HOME'}
+                      </span>
+                    </div>
+
+                    {/* Period & Clock */}
+                    <div className="border-l border-slate-700/80 pl-2 flex items-center gap-1.5 text-[10px]">
+                      <span className="font-black text-amber-400">{effectiveScorebug.period || '1ST'}</span>
+                      <span className="font-mono text-slate-200">{effectiveScorebug.timeRemaining || '0:18'}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Hockey Highlight Tag - Top Right */}
+                {(effectiveTag || effectiveTagText) && (
+                  <div className="absolute top-2 right-2 z-20 pointer-events-none select-none flex flex-col items-end gap-1 animate-in fade-in duration-100">
+                    <span
+                      className={`inline-flex items-center gap-1 text-[11px] font-black italic tracking-wider px-2.5 py-1 rounded-md shadow-2xl border ${
+                        effectiveTag === 'GOAL'
+                          ? 'bg-red-600 text-white border-red-400 shadow-red-950/80 animate-pulse'
+                          : effectiveTag === 'SAVE'
+                          ? 'bg-sky-600 text-white border-sky-400 shadow-sky-950/80'
+                          : effectiveTag === 'HIT'
+                          ? 'bg-orange-600 text-white border-orange-400 shadow-orange-950/80'
+                          : 'bg-amber-600 text-white border-amber-400 shadow-amber-950/80'
+                      }`}
+                    >
+                      <span>
+                        {effectiveTag === 'GOAL'
+                          ? '🚨'
+                          : effectiveTag === 'SAVE'
+                          ? '🧤'
+                          : effectiveTag === 'HIT'
+                          ? '💥'
+                          : '⚡'}
+                      </span>
+                      <span>{effectiveTagText || effectiveTag}</span>
+                    </span>
+
+                    {/* Goal Horn Marker pill on preview */}
+                    {isEligibleForHorn && (
+                      <div className="bg-slate-950/90 backdrop-blur-xs border border-amber-500/60 text-amber-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded shadow flex items-center gap-1">
+                        <Volume2 className="w-3 h-3 text-amber-400 animate-pulse" />
+                        <span>Horn: {activeTriggerOffset.toFixed(1)}s</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Horn Marker if no tag is selected */}
+                {!effectiveTag && !effectiveTagText && isEligibleForHorn && (
+                  <div className="absolute top-2 right-2 z-20 pointer-events-none select-none animate-in fade-in duration-100">
+                    <div className="bg-slate-950/90 backdrop-blur-xs border border-amber-500/60 text-amber-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded shadow flex items-center gap-1">
+                      <Volume2 className="w-3 h-3 text-amber-400 animate-pulse" />
+                      <span>Horn Marker: {activeTriggerOffset.toFixed(1)}s</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Player Lower Third - Bottom Left */}
+                {effectivePlayerBanner.enabled && (
+                  <div className="absolute bottom-2 left-2 z-20 pointer-events-none bg-slate-950/92 backdrop-blur-md border border-sky-500/40 rounded-lg p-1.5 shadow-2xl flex items-center gap-2 max-w-[70%] sm:max-w-[75%] select-none animate-in fade-in duration-100">
+                    {/* Jersey number */}
+                    <div className="w-8 h-8 bg-red-600 rounded flex items-center justify-center font-['Chakra_Petch'] font-black text-white text-sm shadow-md shrink-0 border border-red-400/40">
+                      {effectivePlayerBanner.jerseyNumber
+                        ? `#${effectivePlayerBanner.jerseyNumber.replace('#', '')}`
+                        : '#'}
+                    </div>
+                    {/* Player Details */}
+                    <div className="min-w-0 pr-1">
+                      <div className="font-bold text-white text-xs leading-tight truncate font-['Chakra_Petch']">
+                        {effectivePlayerBanner.playerName || 'Player Name'}
+                      </div>
+                      <div className="text-[10px] text-sky-400 font-medium truncate">
+                        {effectivePlayerBanner.actionText || 'Highlight Play'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* 4. Goal Siren Firing Alert on Video Preview */}
+            {isHornFiring && (
+              <div className="absolute inset-0 pointer-events-none z-30 flex items-center justify-center bg-red-600/20 border-4 border-red-500/90 rounded-xl animate-pulse">
+                <div className="bg-slate-950/95 border-2 border-amber-400 text-amber-300 font-['Chakra_Petch'] font-black px-4 py-2 rounded-xl shadow-2xl flex items-center gap-2.5 text-sm tracking-wider uppercase shadow-amber-500/50">
+                  <span className="text-xl animate-bounce">🚨</span>
+                  <span className="text-white font-extrabold">GOAL HORN SOUNDING!</span>
+                  <span className="text-xl animate-bounce">🚨</span>
+                </div>
+              </div>
+            )}
+
+            {/* Overlay Badges for Zoom */}
             {zoom > 1.02 && (
               <>
-                <div className="absolute top-2 left-2 bg-black/80 backdrop-blur-xs border border-amber-500/50 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1.5 pointer-events-none shadow">
+                <div className="absolute top-12 left-2 bg-black/80 backdrop-blur-xs border border-amber-500/50 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1.5 pointer-events-none shadow z-10">
                   <ZoomIn className="w-3 h-3 text-amber-400" />
                   <span>{zoom.toFixed(2)}x Zoom</span>
                   <span className="text-slate-500">|</span>
@@ -600,9 +888,9 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
                     X: {panX > 0 ? `+${panX}` : panX}% Y: {panY > 0 ? `+${panY}` : panY}%
                   </span>
                 </div>
-                <div className="absolute top-2 right-2 bg-black/75 backdrop-blur-xs text-sky-300 text-[10px] font-medium px-2 py-0.5 rounded flex items-center gap-1 pointer-events-none border border-sky-500/30 shadow">
+                <div className="absolute top-12 right-2 bg-black/75 backdrop-blur-xs text-sky-300 text-[10px] font-medium px-2 py-0.5 rounded flex items-center gap-1 pointer-events-none border border-sky-500/30 shadow z-10">
                   <Move className="w-2.5 h-2.5 text-sky-400" />
-                  <span>Drag preview to reframe</span>
+                  <span>Drag to reframe</span>
                 </div>
 
                 {/* Full Ice Radar / Minimap when zoomed */}
@@ -669,9 +957,9 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
             </button>
           </div>
 
-          {/* Interactive Playback Scrubber & Horn Timeline */}
+          {/* Interactive Playback Scrubber & Goal Horn Marker Track */}
           <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
-            <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center justify-between text-xs flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -687,26 +975,52 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
                 </span>
               </div>
 
-              {isEligibleForHorn && (
-                <button
-                  type="button"
-                  onClick={handlePreviewFromBeforeHorn}
-                  className="flex items-center gap-1 text-[11px] font-mono text-amber-300 hover:text-amber-200 bg-amber-950/60 hover:bg-amber-900/60 px-2.5 py-1 rounded border border-amber-700/60 transition cursor-pointer"
-                  title="Play from 1.5s before goal horn fires"
-                >
-                  <Play className="w-3 h-3 text-amber-400 fill-amber-400" />
-                  <span>Preview Horn Sync</span>
-                </button>
-              )}
+              <div className="flex items-center gap-1.5">
+                {isEligibleForHorn && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUseCustomTiming(true);
+                        setHornTimingOverride(Number(currentPlayTime.toFixed(1)));
+                      }}
+                      className="flex items-center gap-1 text-[11px] font-mono text-sky-300 hover:text-sky-200 bg-sky-950/70 hover:bg-sky-900/70 px-2 py-1 rounded border border-sky-700/60 transition cursor-pointer"
+                      title="Move goal horn marker to current playhead position"
+                    >
+                      <Crosshair className="w-3 h-3 text-sky-400" />
+                      <span>Snap Horn ({currentPlayTime.toFixed(1)}s)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handlePreviewFromBeforeHorn}
+                      className="flex items-center gap-1 text-[11px] font-mono text-amber-300 hover:text-amber-200 bg-amber-950/60 hover:bg-amber-900/60 px-2.5 py-1 rounded border border-amber-700/60 transition cursor-pointer"
+                      title="Play from 1.5s before goal horn fires"
+                    >
+                      <Play className="w-3 h-3 text-amber-400 fill-amber-400" />
+                      <span>Preview Horn Sync</span>
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
 
-            {/* Scrubber Track with Goal Horn Marker */}
+            {/* Scrubber Track with Interactive Draggable Goal Horn Marker */}
             <div
-              className="relative w-full h-5 flex items-center cursor-pointer group"
+              ref={scrubberRef}
+              className="relative w-full h-8 flex items-center cursor-pointer group select-none"
               onClick={(e) => {
+                if (isDraggingHornMarker) return;
                 const rect = e.currentTarget.getBoundingClientRect();
                 const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                handleSeekPlayhead(ratio * trimmedDuration);
+                if (e.altKey || e.shiftKey) {
+                  const newOffset = Math.round(ratio * trimmedDuration * 10) / 10;
+                  setUseCustomTiming(true);
+                  setHornTimingOverride(newOffset);
+                  handleSeekPlayhead(newOffset);
+                } else {
+                  handleSeekPlayhead(ratio * trimmedDuration);
+                }
               }}
             >
               {/* Base track */}
@@ -718,20 +1032,59 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
                 />
               </div>
 
-              {/* Goal Horn Marker on Scrubber */}
+              {/* High-Visibility Draggable Goal Horn Marker on Scrubber */}
               {isEligibleForHorn && (
                 <div
-                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-10 flex flex-col items-center pointer-events-none"
+                  className="absolute top-0 bottom-0 -translate-x-1/2 z-30 flex flex-col items-center select-none"
                   style={{
                     left: `${Math.min(100, Math.max(0, (activeTriggerOffset / trimmedDuration) * 100))}%`,
                   }}
                 >
+                  {/* Interactive Drag Handle with Flag */}
                   <div
-                    className="w-3.5 h-3.5 bg-amber-400 rounded-full border-2 border-black shadow-md shadow-amber-500/50 flex items-center justify-center animate-pulse"
-                    title={`Goal horn fires at ${activeTriggerOffset.toFixed(1)}s`}
+                    onPointerDown={handleHornScrubberPointerDown}
+                    onPointerMove={handleHornScrubberPointerMove}
+                    onPointerUp={handleHornScrubberPointerUp}
+                    onPointerCancel={handleHornScrubberPointerUp}
+                    className={`-top-3.5 absolute flex flex-col items-center cursor-grab active:cursor-grabbing touch-none px-2 py-1 transition-transform ${
+                      isDraggingHornMarker ? 'scale-120 cursor-grabbing z-40' : 'hover:scale-110'
+                    }`}
+                    title="Click & Drag to move Goal Horn marker directly on the video control (or Alt+Click track)"
                   >
-                    <div className="w-1 h-1 bg-black rounded-full" />
+                    {/* Flag Badge */}
+                    <div
+                      className={`font-mono font-black text-[9px] px-2 py-0.5 rounded shadow-xl flex items-center gap-1 border whitespace-nowrap transition ring-2 ${
+                        isDraggingHornMarker
+                          ? 'bg-amber-400 text-slate-950 border-white ring-amber-300 shadow-amber-500/80'
+                          : isHornFiring
+                          ? 'bg-red-600 text-white border-red-300 ring-red-400 scale-110 shadow-red-500/80 animate-bounce'
+                          : 'bg-amber-400 text-slate-950 border-amber-300 ring-amber-500/40 shadow-amber-500/50 hover:ring-amber-300 hover:bg-amber-300'
+                      }`}
+                    >
+                      <GripVertical className="w-2.5 h-2.5 text-slate-900/70" />
+                      <span>🚨</span>
+                      <span>{activeTriggerOffset.toFixed(1)}s</span>
+                      <span className="text-[7.5px] uppercase font-sans font-extrabold text-amber-950 bg-amber-200/90 px-1 py-0.2 rounded">
+                        {isDraggingHornMarker ? 'DRAG' : 'HORN'}
+                      </span>
+                    </div>
+
+                    {/* Floating tooltip during drag */}
+                    {isDraggingHornMarker && (
+                      <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-slate-950 text-amber-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-amber-400 shadow-xl whitespace-nowrap animate-in fade-in zoom-in-95 pointer-events-none">
+                        Horn fires at +{activeTriggerOffset.toFixed(1)}s (Release to place)
+                      </div>
+                    )}
                   </div>
+
+                  {/* Vertical Guide Line cutting through track */}
+                  <div
+                    className={`w-0.5 h-full pointer-events-none transition ${
+                      isDraggingHornMarker
+                        ? 'w-1 bg-amber-300 shadow-[0_0_12px_rgba(251,191,36,1)]'
+                        : 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.9)]'
+                    }`}
+                  />
                 </div>
               )}
             </div>
@@ -739,9 +1092,13 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
             <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
               <span>0.0s</span>
               {isEligibleForHorn && (
-                <span className="text-amber-400 font-bold flex items-center gap-1">
-                  <Volume2 className="w-2.5 h-2.5" /> Horn: {activeTriggerOffset.toFixed(1)}s
-                </span>
+                <div className="text-amber-400 font-medium flex items-center gap-1.5 flex-wrap">
+                  <span className="font-bold flex items-center gap-1">
+                    <Volume2 className="w-2.5 h-2.5" /> Horn Marker: {activeTriggerOffset.toFixed(1)}s
+                  </span>
+                  <span className="text-slate-600">•</span>
+                  <span className="text-slate-400">Drag 🚨 marker directly along scrubber to reposition (or Alt+Click)</span>
+                </div>
               )}
               <span>{trimmedDuration.toFixed(1)}s</span>
             </div>
@@ -993,6 +1350,117 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
                 className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
               />
             </div>
+
+            {/* Visual Multi-Track Bar showing Trim Window & Goal Horn Marker */}
+            <div className="bg-slate-900/90 rounded-xl p-3 border border-slate-800 space-y-2 mt-2">
+              <div className="flex items-center justify-between text-xs flex-wrap gap-2">
+                <span className="text-slate-300 font-semibold flex items-center gap-1.5 font-['Chakra_Petch']">
+                  <Clock className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Timeline &amp; Goal Horn Marker Sync</span>
+                </span>
+                {isEligibleForHorn ? (
+                  <span
+                    className={`font-mono font-bold text-[10px] px-2 py-0.5 rounded flex items-center gap-1 border ${
+                      targetVideoTimestamp >= startTime - 0.05 && targetVideoTimestamp <= endTime + 0.05
+                        ? 'bg-emerald-950/90 text-emerald-300 border-emerald-700/70'
+                        : 'bg-amber-950/90 text-amber-300 border-amber-700/70'
+                    }`}
+                  >
+                    <span>🚨</span>
+                    <span>
+                      Horn fires at {targetVideoTimestamp.toFixed(2)}s (
+                      {targetVideoTimestamp >= startTime - 0.05 && targetVideoTimestamp <= endTime + 0.05
+                        ? `+${activeTriggerOffset.toFixed(1)}s in trimmed clip`
+                        : 'Outside trim range!'}
+                      )
+                    </span>
+                  </span>
+                ) : (
+                  <span className="text-slate-500 text-[10px] font-mono">
+                    Goal horn inactive or muted
+                  </span>
+                )}
+              </div>
+
+              {/* Visual Track */}
+              <div
+                ref={timelineBarRef}
+                className="relative w-full h-6 bg-slate-950 rounded-lg overflow-visible border border-slate-800 select-none"
+              >
+                {/* Active Trimmed Region */}
+                <div
+                  className="absolute top-0 bottom-0 bg-sky-500/25 border-x-2 border-sky-400"
+                  style={{
+                    left: `${Math.min(100, Math.max(0, (startTime / maxDuration) * 100))}%`,
+                    width: `${Math.min(100, Math.max(0, ((endTime - startTime) / maxDuration) * 100))}%`,
+                  }}
+                  title={`Trimmed Range: ${startTime.toFixed(2)}s - ${endTime.toFixed(2)}s`}
+                />
+
+                {/* Current Playhead */}
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-white z-10 shadow"
+                  style={{
+                    left: `${Math.min(
+                      100,
+                      Math.max(0, ((startTime + currentPlayTime * playbackRate) / maxDuration) * 100),
+                    )}%`,
+                  }}
+                  title={`Current Playhead: ${(startTime + currentPlayTime * playbackRate).toFixed(2)}s`}
+                />
+
+                {/* Draggable Goal Horn Marker Pin on Source Timeline */}
+                {isEligibleForHorn && (
+                  <div
+                    className="absolute top-0 bottom-0 -translate-x-1/2 z-20 flex items-center justify-center select-none"
+                    style={{
+                      left: `${Math.min(100, Math.max(0, (targetVideoTimestamp / maxDuration) * 100))}%`,
+                    }}
+                  >
+                    <div
+                      onPointerDown={handleHornTimelinePointerDown}
+                      onPointerMove={handleHornTimelinePointerMove}
+                      onPointerUp={handleHornTimelinePointerUp}
+                      onPointerCancel={handleHornTimelinePointerUp}
+                      className={`w-6 h-6 rounded-full flex items-center justify-center cursor-grab active:cursor-grabbing touch-none transition-transform ${
+                        isDraggingTimelineHorn ? 'scale-125 cursor-grabbing z-30' : 'hover:scale-115'
+                      }`}
+                      title="Click & Drag to reposition Goal Horn directly on the source timeline"
+                    >
+                      <div
+                        className={`w-4 h-4 rounded-full border-2 border-black flex items-center justify-center shadow-lg transition ring-2 ${
+                          isDraggingTimelineHorn
+                            ? 'bg-amber-300 ring-amber-200 shadow-amber-400/90'
+                            : isHornFiring
+                            ? 'bg-red-500 ring-red-400 shadow-red-500/80 animate-ping'
+                            : 'bg-amber-400 ring-amber-500/50 shadow-amber-500/80 hover:ring-amber-300'
+                        }`}
+                      >
+                        <span className="text-[8px] leading-none">🚨</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                <span>0.00s (Clip Start)</span>
+                {isEligibleForHorn && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUseCustomTiming(true);
+                      setHornTimingOverride(Number(currentPlayTime.toFixed(1)));
+                    }}
+                    className="text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer transition hover:underline"
+                    title="Click to snap goal horn to current playback frame"
+                  >
+                    <span>🚨 Snap Horn to Current Frame ({currentPlayTime.toFixed(1)}s)</span>
+                  </button>
+                )}
+                <span>{maxDuration.toFixed(2)}s (Clip End)</span>
+              </div>
+            </div>
           </div>
 
           {/* Playback Speed & Volume */}
@@ -1140,50 +1608,106 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
                   </div>
 
                   {scorebugOverride.enabled !== false && (
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <label className="text-[10px] text-slate-400 uppercase font-semibold">Away Team &amp; Score</label>
-                        <div className="flex gap-1.5 mt-0.5">
-                          <input
-                            type="text"
-                            maxLength={24}
-                            list="hockey-popular-teams-datalist"
-                            value={scorebugOverride.awayTeam || 'BOS'}
-                            onChange={(e) => setScorebugOverride(prev => ({ ...prev, awayTeam: e.target.value.toUpperCase() }))}
-                            className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-white font-bold"
-                            placeholder="e.g. EDMONTON, BOS"
-                          />
-                          <input
-                            type="number"
-                            min={0}
-                            max={99}
-                            value={scorebugOverride.awayScore ?? 0}
-                            onChange={(e) => setScorebugOverride(prev => ({ ...prev, awayScore: parseInt(e.target.value) || 0 }))}
-                            className="w-12 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-sky-400 font-black text-center"
-                          />
+                    <div className="space-y-2.5 text-xs">
+                      {overlaySettings?.scorebug && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setScorebugOverride({
+                                ...overlaySettings.scorebug,
+                                enabled: true,
+                              });
+                            }}
+                            className="text-[10px] text-sky-400 hover:text-sky-300 flex items-center gap-1 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 transition"
+                          >
+                            <Copy className="w-2.5 h-2.5" />
+                            <span>Copy Global Scorebug ({overlaySettings.scorebug.awayTeam} vs {overlaySettings.scorebug.homeTeam})</span>
+                          </button>
                         </div>
-                      </div>
+                      )}
 
-                      <div>
-                        <label className="text-[10px] text-slate-400 uppercase font-semibold">Home Team &amp; Score</label>
-                        <div className="flex gap-1.5 mt-0.5">
-                          <input
-                            type="text"
-                            maxLength={24}
-                            list="hockey-popular-teams-datalist"
-                            value={scorebugOverride.homeTeam || 'NYR'}
-                            onChange={(e) => setScorebugOverride(prev => ({ ...prev, homeTeam: e.target.value.toUpperCase() }))}
-                            className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-white font-bold"
-                            placeholder="e.g. COLORADO, NYR"
-                          />
-                          <input
-                            type="number"
-                            min={0}
-                            max={99}
-                            value={scorebugOverride.homeScore ?? 1}
-                            onChange={(e) => setScorebugOverride(prev => ({ ...prev, homeScore: parseInt(e.target.value) || 0 }))}
-                            className="w-12 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-sky-400 font-black text-center"
-                          />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-slate-400 uppercase font-semibold">Away Team &amp; Score</label>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <input
+                              type="text"
+                              maxLength={24}
+                              list="hockey-popular-teams-datalist"
+                              value={scorebugOverride.awayTeam || 'BOS'}
+                              onChange={(e) => setScorebugOverride(prev => ({ ...prev, awayTeam: e.target.value.toUpperCase() }))}
+                              className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-white font-bold"
+                              placeholder="e.g. EDMONTON, BOS"
+                            />
+                            <div className="flex items-center bg-slate-950 border border-slate-800 rounded p-0.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setScorebugOverride(prev => ({ ...prev, awayScore: Math.max(0, (prev.awayScore ?? 0) - 1) }))}
+                                className="w-6 h-6 rounded bg-slate-850 hover:bg-slate-750 text-slate-200 flex items-center justify-center font-bold text-xs cursor-pointer select-none"
+                                title="Decrease score (-1)"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <input
+                                type="number"
+                                min={0}
+                                max={99}
+                                value={scorebugOverride.awayScore ?? 0}
+                                onChange={(e) => setScorebugOverride(prev => ({ ...prev, awayScore: Math.max(0, parseInt(e.target.value) || 0) }))}
+                                className="w-8 bg-transparent text-sky-400 font-black text-center font-mono text-xs focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setScorebugOverride(prev => ({ ...prev, awayScore: Math.min(99, (prev.awayScore ?? 0) + 1) }))}
+                                className="w-6 h-6 rounded bg-slate-850 hover:bg-slate-750 text-slate-200 flex items-center justify-center font-bold text-xs cursor-pointer select-none"
+                                title="Increase score (+1)"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-slate-400 uppercase font-semibold">Home Team &amp; Score</label>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <input
+                              type="text"
+                              maxLength={24}
+                              list="hockey-popular-teams-datalist"
+                              value={scorebugOverride.homeTeam || 'NYR'}
+                              onChange={(e) => setScorebugOverride(prev => ({ ...prev, homeTeam: e.target.value.toUpperCase() }))}
+                              className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-white font-bold"
+                              placeholder="e.g. COLORADO, NYR"
+                            />
+                            <div className="flex items-center bg-slate-950 border border-slate-800 rounded p-0.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setScorebugOverride(prev => ({ ...prev, homeScore: Math.max(0, (prev.homeScore ?? 0) - 1) }))}
+                                className="w-6 h-6 rounded bg-slate-850 hover:bg-slate-750 text-slate-200 flex items-center justify-center font-bold text-xs cursor-pointer select-none"
+                                title="Decrease score (-1)"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <input
+                                type="number"
+                                min={0}
+                                max={99}
+                                value={scorebugOverride.homeScore ?? 1}
+                                onChange={(e) => setScorebugOverride(prev => ({ ...prev, homeScore: Math.max(0, parseInt(e.target.value) || 0) }))}
+                                className="w-8 bg-transparent text-sky-400 font-black text-center font-mono text-xs focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setScorebugOverride(prev => ({ ...prev, homeScore: Math.min(99, (prev.homeScore ?? 0) + 1) }))}
+                                className="w-6 h-6 rounded bg-slate-850 hover:bg-slate-750 text-slate-200 flex items-center justify-center font-bold text-xs cursor-pointer select-none"
+                                title="Increase score (+1)"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </div>
 

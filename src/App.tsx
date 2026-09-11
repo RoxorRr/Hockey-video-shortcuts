@@ -366,7 +366,7 @@ export default function App() {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-['Plus_Jakarta_Sans'] antialiased relative"
+      className="h-screen max-h-screen h-[100dvh] w-screen bg-slate-950 text-slate-100 flex flex-col font-['Plus_Jakarta_Sans'] antialiased relative overflow-hidden"
     >
       {/* Drag & drop overlay indicator */}
       {isDraggingOver && (
@@ -394,12 +394,12 @@ export default function App() {
         clipsCount={clips.length}
       />
 
-      {/* Main Studio Viewport */}
-      <main className="flex-1 max-w-7xl mx-auto w-full p-4 lg:p-6 flex flex-col gap-6">
+      {/* Main Studio Viewport - strictly fits 100% monitor viewport without vertical scrolling */}
+      <main className="flex-1 min-h-0 w-full px-2.5 sm:px-3 py-2 flex flex-col gap-2 overflow-hidden">
         {/* Top Split: Video Player on the left, Overlays / Controls on the right */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-2.5 overflow-hidden">
           {/* Main Stage Video Player (7 columns on desktop) */}
-          <div className="lg:col-span-7 flex flex-col items-center justify-center">
+          <div className="lg:col-span-7 xl:col-span-7 flex flex-col min-h-0 h-full overflow-hidden">
             <VideoPlayer
               clips={clips}
               transitions={transitions}
@@ -425,7 +425,7 @@ export default function App() {
           </div>
 
           {/* Hockey Overlays, Scorebug, & Sound FX Config (5 columns on desktop) */}
-          <div className="lg:col-span-5 flex flex-col gap-4">
+          <div className="lg:col-span-5 xl:col-span-5 flex flex-col min-h-0 h-full overflow-hidden">
             <OverlayControls
               settings={overlaySettings}
               onChange={setOverlaySettings}
@@ -434,30 +434,11 @@ export default function App() {
               onSelectClipIndex={setSelectedClipIndex}
               onUpdateClip={handleUpdateClip}
             />
-
-            {/* Quick Tips & YouTube Shortcuts Guide */}
-            <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 text-xs space-y-2">
-              <h4 className="font-bold text-white uppercase tracking-wider font-['Chakra_Petch'] flex items-center gap-1.5 text-sky-400">
-                <Sparkles className="w-3.5 h-3.5" />
-                Hockey Shortcut Tips
-              </h4>
-              <ul className="space-y-1.5 text-slate-400 list-disc list-inside">
-                <li>
-                  <strong className="text-slate-300">9:16 Format</strong> automatically formats your montage as a YouTube Short.
-                </li>
-                <li>
-                  Click the <strong className="text-sky-400">transition nodes</strong> between clips on the timeline to switch between Zamboni Ice Wipe, Goal Flash, Crossfade, or Glitch.
-                </li>
-                <li>
-                  Use <strong className="text-red-400">Trim & Edit</strong> to cut dead air and highlight the exact deke, save, or top shelf goal.
-                </li>
-              </ul>
-            </div>
           </div>
         </div>
 
         {/* Bottom Horizontal Timeline */}
-        <div className="w-full">
+        <div className="shrink-0 w-full overflow-hidden">
           <Timeline
             clips={clips}
             transitions={transitions}

@@ -1,7 +1,8 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { HockeyOverlaySettings, GoalHornConfig, VideoClip, ScorebugConfig, PlayerBannerConfig } from '../types';
 import { PlayerRosterPicker } from './PlayerRosterPicker';
 import { autoRememberPlayer } from '../lib/rosterStorage';
+import { saveRememberedScorebug, getRememberedScorebug } from '../lib/scorebugStorage';
 import {
   Shield,
   User,
@@ -19,6 +20,12 @@ import {
   RotateCcw,
   Copy,
   Check,
+  Plus,
+  Minus,
+  Bookmark,
+  Layers,
+  ArrowRight,
+  Flame,
 } from 'lucide-react';
 import { playGoalHorn, playArenaBuzzer, playHornSound } from '../lib/audio';
 
@@ -42,6 +49,20 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isPlayingHorn, setIsPlayingHorn] = useState(false);
   const activeHornStopRef = useRef<(() => void) | null>(null);
+  const [activeTab, setActiveTab] = useState<'scorebug' | 'player' | 'horn' | 'fx'>('scorebug');
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+
+  // Remembered game scorebug state
+  const [rememberedGame, setRememberedGame] = useState<ScorebugConfig | null>(() => getRememberedScorebug());
+
+  useEffect(() => {
+    const handleScorebugChange = (e: Event) => {
+      const custom = (e as CustomEvent<ScorebugConfig>).detail;
+      if (custom) setRememberedGame(custom);
+    };
+    window.addEventListener('hockey_scorebug_changed', handleScorebugChange);
+    return () => window.removeEventListener('hockey_scorebug_changed', handleScorebugChange);
+  }, []);
 
   const isEditingClip =
     selectedClipIndex !== null &&
@@ -79,14 +100,34 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
         }
       : settings.playerBanner;
 
+  // Scorebug reference from First Clip (Primary Game Anchor)
+  const firstClip = clips.length > 0 ? clips[0] : null;
+  const firstClipScorebug: ScorebugConfig =
+    firstClip?.useCustomOverlays && firstClip?.scorebugOverride
+      ? { ...settings.scorebug, ...firstClip.scorebugOverride }
+      : settings.scorebug;
+
+  // Scorebug from previous sequential clip (for score carry-over)
+  const prevClip =
+    isEditingClip && selectedClipIndex! > 0 ? clips[selectedClipIndex! - 1] : null;
+  const prevClipScorebug: ScorebugConfig =
+    prevClip?.useCustomOverlays && prevClip?.scorebugOverride
+      ? { ...settings.scorebug, ...prevClip.scorebugOverride }
+      : settings.scorebug;
+
   const updateScorebug = (field: string, val: any) => {
+    const updatedScorebug = {
+      ...settings.scorebug,
+      [field]: val,
+    };
     onChange({
       ...settings,
-      scorebug: {
-        ...settings.scorebug,
-        [field]: val,
-      },
+      scorebug: updatedScorebug,
     });
+    // Auto remember teams when editing global
+    if (field === 'awayTeam' || field === 'homeTeam') {
+      saveRememberedScorebug(updatedScorebug);
+    }
   };
 
   const updatePlayerBanner = (field: string, val: any) => {
@@ -103,17 +144,141 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
   const updateActiveScorebug = (field: string, val: any) => {
     if (isEditingClip && currentClip && onUpdateClip) {
       const existingOverride = currentClip.scorebugOverride || { ...settings.scorebug };
+      const updatedOverride = {
+        ...existingOverride,
+        [field]: val,
+      };
+
+      onUpdateClip(selectedClipIndex!, {
+        ...currentClip,
+        useCustomOverlays: true,
+        scorebugOverride: updatedOverride,
+      });
+
+      // If updating Clip #1: automatically remember and update game defaults
+      if (selectedClipIndex === 0) {
+        saveRememberedScorebug(updatedOverride);
+        if (field === 'awayTeam' || field === 'homeTeam') {
+          onChange({
+            ...settings,
+            scorebug: {
+              ...settings.scorebug,
+              [field]: val,
+            },
+          });
+        }
+      }
+    } else {
+      updateScorebug(field, val);
+    }
+  };
+
+  // Helper to safely step score
+  const stepScore = (team: 'awayScore' | 'homeScore', delta: number) => {
+    const currentVal = (activeScorebug[team] as number) ?? 0;
+    const nextVal = Math.max(0, Math.min(99, currentVal + delta));
+    updateActiveScorebug(team, nextVal);
+  };
+
+  // Apply Clip #1 Game Data (teams and clock) across all clips & set as global defaults
+  const handleApplyClip1AsGameDefault = () => {
+    saveRememberedScorebug(firstClipScorebug);
+
+    // Update global settings
+    onChange({
+      ...settings,
+      scorebug: {
+        ...settings.scorebug,
+        awayTeam: firstClipScorebug.awayTeam,
+        homeTeam: firstClipScorebug.homeTeam,
+        period: firstClipScorebug.period,
+        timeRemaining: firstClipScorebug.timeRemaining,
+      },
+    });
+
+    // Propagate team names to other clips if they have custom scorebugs
+    if (onUpdateClip && clips.length > 1) {
+      clips.forEach((c, idx) => {
+        if (idx !== 0 && c.useCustomOverlays && c.scorebugOverride) {
+          onUpdateClip(idx, {
+            ...c,
+            scorebugOverride: {
+              ...c.scorebugOverride,
+              awayTeam: firstClipScorebug.awayTeam,
+              homeTeam: firstClipScorebug.homeTeam,
+            },
+          });
+        }
+      });
+    }
+
+    setSyncFeedback('Clip #1 teams synced across all clips & saved!');
+    setTimeout(() => setSyncFeedback(null), 3000);
+  };
+
+  // Copy Scorebug settings directly from Clip #1
+  const handleCopyFromClip1 = () => {
+    if (isEditingClip && currentClip && onUpdateClip) {
+      const currentOverride = currentClip.scorebugOverride || { ...settings.scorebug };
       onUpdateClip(selectedClipIndex!, {
         ...currentClip,
         useCustomOverlays: true,
         scorebugOverride: {
-          ...existingOverride,
-          [field]: val,
+          ...currentOverride,
+          awayTeam: firstClipScorebug.awayTeam,
+          homeTeam: firstClipScorebug.homeTeam,
+          period: firstClipScorebug.period,
+          timeRemaining: firstClipScorebug.timeRemaining,
+          enabled: true,
         },
       });
     } else {
-      updateScorebug(field, val);
+      onChange({
+        ...settings,
+        scorebug: {
+          ...settings.scorebug,
+          awayTeam: firstClipScorebug.awayTeam,
+          homeTeam: firstClipScorebug.homeTeam,
+          period: firstClipScorebug.period,
+          timeRemaining: firstClipScorebug.timeRemaining,
+        },
+      });
     }
+    setSyncFeedback('Teams & Clock copied from Clip #1!');
+    setTimeout(() => setSyncFeedback(null), 2500);
+  };
+
+  // Carry Over Ending Score from Previous Clip
+  const handleCarryOverFromPrevClip = () => {
+    if (!isEditingClip || !currentClip || !onUpdateClip || selectedClipIndex! <= 0) return;
+    const currentOverride = currentClip.scorebugOverride || { ...settings.scorebug };
+    onUpdateClip(selectedClipIndex!, {
+      ...currentClip,
+      useCustomOverlays: true,
+      scorebugOverride: {
+        ...currentOverride,
+        awayTeam: prevClipScorebug.awayTeam,
+        homeTeam: prevClipScorebug.homeTeam,
+        awayScore: prevClipScorebug.awayScore,
+        homeScore: prevClipScorebug.homeScore,
+        period: prevClipScorebug.period,
+        timeRemaining: prevClipScorebug.timeRemaining,
+        enabled: true,
+      },
+    });
+    setSyncFeedback(`Carried over score (${prevClipScorebug.awayScore}-${prevClipScorebug.homeScore}) from Clip #${selectedClipIndex!}!`);
+    setTimeout(() => setSyncFeedback(null), 2500);
+  };
+
+  // Restore saved game teams from localStorage
+  const handleRestoreRememberedGame = () => {
+    if (!rememberedGame) return;
+    updateActiveScorebug('awayTeam', rememberedGame.awayTeam);
+    updateActiveScorebug('homeTeam', rememberedGame.homeTeam);
+    updateActiveScorebug('period', rememberedGame.period || '1ST');
+    updateActiveScorebug('timeRemaining', rememberedGame.timeRemaining || '20:00');
+    setSyncFeedback(`Restored ${rememberedGame.awayTeam} vs ${rememberedGame.homeTeam}!`);
+    setTimeout(() => setSyncFeedback(null), 2500);
   };
 
   // Update Player Banner for active scope
@@ -140,7 +305,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
       onUpdateClip(selectedClipIndex!, {
         ...currentClip,
         useCustomOverlays: true,
-        scorebugOverride: currentClip.scorebugOverride || { ...settings.scorebug },
+        scorebugOverride: currentClip.scorebugOverride || { ...firstClipScorebug },
         playerBannerOverride: currentClip.playerBannerOverride || { ...settings.playerBanner },
       });
     } else {
@@ -196,7 +361,6 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
 
     const url = URL.createObjectURL(file);
 
-    // Apply immediately so the audio source is active without waiting for event loops
     const nextHornConfig: GoalHornConfig = {
       ...hornConfig,
       enabled: true,
@@ -212,36 +376,26 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
       hornConfig: nextHornConfig,
     });
 
-    // Detect duration and update config
     const tempAudio = new Audio();
     tempAudio.preload = 'metadata';
     tempAudio.onloadedmetadata = () => {
       const dur = tempAudio.duration;
       if (Number.isFinite(dur) && dur > 0) {
-        const roundedDur = Number(dur.toFixed(1));
-        const currentDur = hornConfig.hornDuration;
-        const keepCurrent = typeof currentDur === 'number' && Number.isFinite(currentDur) && currentDur > 0;
         updateHornConfig({
-          customHornDuration: roundedDur,
-          hornDuration: keepCurrent ? currentDur : Math.min(5.0, roundedDur),
+          customHornDuration: dur,
+          hornDuration: Math.min(60.0, Math.max(1.0, dur)),
         });
       }
     };
     tempAudio.src = url;
-    tempAudio.load();
   };
 
   const handleRemoveCustomHorn = () => {
-    if (activeHornStopRef.current) {
-      activeHornStopRef.current();
-      activeHornStopRef.current = null;
-    }
     if (hornConfig.customHornUrl && hornConfig.customHornUrl.startsWith('blob:')) {
       try {
         URL.revokeObjectURL(hornConfig.customHornUrl);
       } catch {}
     }
-    setIsPlayingHorn(false);
     updateHornConfig({
       useCustomHorn: false,
       customHornName: undefined,
@@ -253,8 +407,10 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
 
   const toggleAuditionHorn = async () => {
     if (isPlayingHorn) {
-      activeHornStopRef.current?.();
-      activeHornStopRef.current = null;
+      if (activeHornStopRef.current) {
+        activeHornStopRef.current();
+        activeHornStopRef.current = null;
+      }
       setIsPlayingHorn(false);
       return;
     }
@@ -279,55 +435,61 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
   };
 
   return (
-    <div className="w-full bg-slate-900/90 border border-slate-800 rounded-2xl p-4 lg:p-6 shadow-xl space-y-5">
+    <div className="h-full flex flex-col bg-slate-900/90 border border-slate-800/90 rounded-2xl p-2.5 sm:p-3.5 shadow-xl select-none overflow-hidden">
       {/* Header bar */}
-      <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-3 gap-2">
+      <div className="shrink-0 flex items-center justify-between border-b border-slate-800 pb-2 mb-2 gap-2">
         <div className="flex items-center gap-2">
-          <Trophy className="w-5 h-5 text-red-500" />
-          <h3 className="font-['Chakra_Petch'] font-bold text-white tracking-wider text-sm uppercase">
-            Hockey Graphics & Overlays
+          <Trophy className="w-4 h-4 text-red-500" />
+          <h3 className="font-['Chakra_Petch'] font-bold text-white tracking-wider text-xs uppercase">
+            Broadcast Overlays & FX
           </h3>
         </div>
-        <span className="text-[11px] text-slate-400">Scorebug, Player Card & Horn FX</span>
+        {syncFeedback ? (
+          <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1 animate-pulse">
+            <Check className="w-3 h-3" />
+            {syncFeedback}
+          </span>
+        ) : (
+          <span className="text-[10px] text-slate-400">Scorebug, Lower Third & FX</span>
+        )}
       </div>
 
       {/* Scope Selector: Global vs Individual Clips */}
       {clips.length > 0 && (
-        <div className="bg-slate-950/90 border border-slate-800/90 rounded-xl p-2.5 space-y-2">
-          <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
-            <span className="font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-              <Film className="w-3.5 h-3.5 text-sky-400" />
-              Target Scope:
+        <div className="shrink-0 bg-slate-950/80 border border-slate-800/80 rounded-xl p-2 mb-2 space-y-1.5">
+          <div className="flex items-center justify-between text-[10px] text-slate-400 px-0.5">
+            <span className="font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-1">
+              <Film className="w-3 h-3 text-sky-400" />
+              Scope:
             </span>
-            <span className="text-[10px]">
+            <span className="text-[10px] font-mono">
               {isEditingClip
-                ? `Customizing Clip ${selectedClipIndex! + 1} of ${clips.length}`
-                : 'Editing Global Defaults (All Clips)'}
+                ? `Clip ${selectedClipIndex! + 1} of ${clips.length}`
+                : 'Global Defaults'}
             </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1 max-h-16 overflow-y-auto custom-scrollbar">
             {/* Global Button */}
             <button
               type="button"
               id="scope-global-btn"
               onClick={() => onSelectClipIndex?.(null)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${
                 !isEditingClip
-                  ? 'bg-red-600 text-white shadow-md shadow-red-950/40'
+                  ? 'bg-red-600 text-white shadow-xs'
                   : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-850 border border-slate-800'
               }`}
             >
-              <Globe className="w-3.5 h-3.5" />
-              <span>Global Defaults</span>
+              <Globe className="w-3 h-3" />
+              <span>Global</span>
             </button>
 
             {/* Clip Buttons */}
             {clips.map((clip, idx) => {
               const isSelected = isEditingClip && selectedClipIndex === idx;
               const hasCustom = Boolean(clip.useCustomOverlays);
-              const customName = clip.playerBannerOverride?.playerName;
-              const customNum = clip.playerBannerOverride?.jerseyNumber;
+              const isFirst = idx === 0;
 
               return (
                 <button
@@ -335,22 +497,19 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
                   type="button"
                   id={`scope-clip-btn-${idx}`}
                   onClick={() => onSelectClipIndex?.(idx)}
-                  className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer max-w-[200px] truncate border ${
+                  className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer truncate border ${
                     isSelected
-                      ? 'bg-sky-600 border-sky-500 text-white shadow-md shadow-sky-950/40 font-bold'
+                      ? 'bg-sky-600 border-sky-500 text-white font-bold shadow-xs'
                       : hasCustom
-                      ? 'bg-slate-900/90 border-sky-800/80 text-sky-300 hover:bg-slate-850'
+                      ? 'bg-slate-900 border-sky-800/80 text-sky-300 hover:bg-slate-850'
                       : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-850'
                   }`}
-                  title={`${clip.name} ${hasCustom ? '(Has custom overlays)' : '(Inherits global)'}`}
+                  title={`Clip #${idx + 1}: ${clip.name} ${isFirst ? '(Primary Game Anchor)' : ''}`}
                 >
-                  <span className="shrink-0 font-mono">#{idx + 1}</span>
-                  <span className="truncate">{customName || clip.name}</span>
+                  <span className="font-mono">#{idx + 1}</span>
+                  {isFirst && <span className="text-amber-400 text-[9px]">★</span>}
                   {hasCustom && (
-                    <span
-                      className="w-2 h-2 rounded-full bg-sky-400 shrink-0 shadow-xs shadow-sky-400"
-                      title="Custom player/score active"
-                    />
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0 shadow-xs" />
                   )}
                 </button>
               );
@@ -359,710 +518,736 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
         </div>
       )}
 
-      {/* Selected Clip Banner (When a specific clip is targeted) */}
+      {/* Clip Customization Bar (If editing a clip) */}
       {isEditingClip && currentClip && (
         <div
-          className={`rounded-xl p-3.5 border transition-all ${
+          className={`shrink-0 rounded-xl px-3 py-2 border mb-2 transition-all flex items-center justify-between gap-2 text-xs ${
             isClipCustomized
-              ? 'bg-sky-950/40 border-sky-700/60'
-              : 'bg-slate-950/70 border-slate-800'
+              ? 'bg-sky-950/40 border-sky-700/60 text-sky-200'
+              : 'bg-slate-950/70 border-slate-800 text-slate-300'
           }`}
         >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="space-y-0.5">
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-white text-xs">
-                  Clip #{selectedClipIndex! + 1}: {currentClip.name}
-                </span>
-                {isClipCustomized ? (
-                  <span className="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/40 px-2 py-0.5 rounded font-bold uppercase">
-                    Custom Overlays Active
-                  </span>
-                ) : (
-                  <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-medium">
-                    Inheriting Global Overlays
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400">
-                {isClipCustomized
-                  ? 'This clip features its own custom player lower third and game score on the timeline.'
-                  : 'Turn on custom overlays below to feature a different player and a different score for this highlight!'}
-              </p>
-            </div>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="font-bold text-white truncate text-[11px]">
+              Clip #{selectedClipIndex! + 1}
+            </span>
+            {isClipCustomized ? (
+              <span className="text-[9px] bg-sky-500/20 text-sky-300 border border-sky-500/40 px-1.5 py-0.2 rounded font-bold uppercase shrink-0">
+                Custom Overlays
+              </span>
+            ) : (
+              <span className="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.2 rounded font-medium shrink-0">
+                Using Global
+              </span>
+            )}
+          </div>
 
-            <div className="flex items-center gap-2">
-              {isClipCustomized ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleCopyGlobalToClip}
-                    className="text-[11px] px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-700 flex items-center gap-1 transition cursor-pointer"
-                    title="Copy current global score and player text into this clip"
-                  >
-                    <Copy className="w-3 h-3 text-slate-400" />
-                    <span>Copy Global</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleToggleClipCustomOverlays(false)}
-                    className="text-[11px] px-2.5 py-1 rounded bg-slate-900 hover:bg-red-950/50 text-slate-400 hover:text-red-300 border border-slate-700 hover:border-red-800 flex items-center gap-1 transition cursor-pointer"
-                    title="Remove overrides and inherit global overlays"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    <span>Revert to Global</span>
-                  </button>
-                </>
-              ) : (
+          <div className="flex items-center gap-1 shrink-0">
+            {isClipCustomized ? (
+              <>
                 <button
                   type="button"
-                  onClick={() => handleToggleClipCustomOverlays(true)}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold flex items-center gap-1.5 transition shadow shadow-sky-950/40 cursor-pointer"
+                  onClick={handleCopyGlobalToClip}
+                  className="text-[10px] px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 flex items-center gap-1 transition"
+                  title="Copy global defaults into this clip"
                 >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Customize for Clip #{selectedClipIndex! + 1}</span>
+                  <Copy className="w-2.5 h-2.5" />
+                  <span>Copy Global</span>
                 </button>
-              )}
-            </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleClipCustomOverlays(false)}
+                  className="text-[10px] px-2 py-0.5 rounded bg-slate-900 hover:bg-red-950/40 text-slate-400 hover:text-red-300 border border-slate-700 hover:border-red-800 flex items-center gap-1 transition"
+                  title="Revert to inheriting global settings"
+                >
+                  <RotateCcw className="w-2.5 h-2.5" />
+                  <span>Revert</span>
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleToggleClipCustomOverlays(true)}
+                className="text-[10px] px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white font-bold flex items-center gap-1 transition shadow-xs"
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>Customize Clip</span>
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {/* Overlays Editor Cards (Scorebug & Player Banner) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Scorebug Panel */}
-        <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-              <Shield className="w-3.5 h-3.5 text-sky-400" />
-              Game Scorebug
-              {isEditingClip && isClipCustomized && (
-                <span className="text-[9px] text-sky-400 font-mono font-bold bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/60">
-                  Clip #{selectedClipIndex! + 1}
-                </span>
-              )}
-            </span>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                id="scorebug-toggle-checkbox"
-                type="checkbox"
-                checked={activeScorebug.enabled}
-                onChange={(e) => updateActiveScorebug('enabled', e.target.checked)}
-                className="sr-only peer"
-              />
-              <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-600"></div>
-            </label>
-          </div>
+      {/* Inspector Tab Bar */}
+      <div className="shrink-0 flex items-center gap-1 bg-slate-950/90 p-1 rounded-xl border border-slate-800 mb-2.5">
+        <button
+          type="button"
+          onClick={() => setActiveTab('scorebug')}
+          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+            activeTab === 'scorebug'
+              ? 'bg-red-600 text-white shadow-sm shadow-red-950/40'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <Shield className="w-3.5 h-3.5 text-sky-400" />
+          <span>Scorebug</span>
+          <span className="text-[10px] font-mono text-white/80 hidden sm:inline">
+            ({activeScorebug.awayScore ?? 0}-{activeScorebug.homeScore ?? 0})
+          </span>
+        </button>
 
-          {activeScorebug.enabled && (
-            <div className="space-y-2.5 pt-1 text-xs">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] text-slate-400 uppercase font-semibold">Away Team &amp; Score</label>
-                  <div className="flex gap-1.5 mt-0.5">
-                    <input
-                      type="text"
-                      maxLength={24}
-                      list="hockey-popular-teams-datalist"
-                      value={activeScorebug.awayTeam}
-                      onChange={(e) => updateActiveScorebug('awayTeam', e.target.value.toUpperCase())}
-                      className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-white font-bold"
-                      placeholder="e.g. EDMONTON, BOS"
-                    />
-                    <input
-                      type="number"
-                      min={0}
-                      max={99}
-                      value={activeScorebug.awayScore}
-                      onChange={(e) => updateActiveScorebug('awayScore', parseInt(e.target.value) || 0)}
-                      className="w-12 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-sky-400 font-black text-center"
-                    />
-                  </div>
-                </div>
+        <button
+          type="button"
+          onClick={() => setActiveTab('player')}
+          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+            activeTab === 'player'
+              ? 'bg-red-600 text-white shadow-sm shadow-red-950/40'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <User className="w-3.5 h-3.5 text-red-400" />
+          <span>Player Card</span>
+        </button>
 
-                <div>
-                  <label className="text-[10px] text-slate-400 uppercase font-semibold">Home Team &amp; Score</label>
-                  <div className="flex gap-1.5 mt-0.5">
-                    <input
-                      type="text"
-                      maxLength={24}
-                      list="hockey-popular-teams-datalist"
-                      value={activeScorebug.homeTeam}
-                      onChange={(e) => updateActiveScorebug('homeTeam', e.target.value.toUpperCase())}
-                      className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-white font-bold"
-                      placeholder="e.g. COLORADO, NYR"
-                    />
-                    <input
-                      type="number"
-                      min={0}
-                      max={99}
-                      value={activeScorebug.homeScore}
-                      onChange={(e) => updateActiveScorebug('homeScore', parseInt(e.target.value) || 0)}
-                      className="w-12 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-sky-400 font-black text-center"
-                    />
-                  </div>
-                </div>
-              </div>
+        <button
+          type="button"
+          onClick={() => setActiveTab('horn')}
+          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+            activeTab === 'horn'
+              ? 'bg-red-600 text-white shadow-sm shadow-red-950/40'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+        >
+          <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+          <span>Horn FX</span>
+        </button>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] text-slate-400 uppercase font-semibold">Period</label>
-                  <select
-                    value={activeScorebug.period}
-                    onChange={(e) => updateActiveScorebug('period', e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-white text-xs mt-0.5"
-                  >
-                    <option value="1ST">1st Period</option>
-                    <option value="2ND">2nd Period</option>
-                    <option value="3RD">3rd Period</option>
-                    <option value="OT">Overtime</option>
-                    <option value="SO">Shootout</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-[10px] text-slate-400 uppercase font-semibold">Clock</label>
-                  <input
-                    type="text"
-                    value={activeScorebug.timeRemaining}
-                    onChange={(e) => updateActiveScorebug('timeRemaining', e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-white font-mono text-center mt-0.5"
-                    placeholder="0:14"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Player Banner Lower Third */}
-        <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-              <User className="w-3.5 h-3.5 text-red-400" />
-              Player Lower Third
-              {isEditingClip && isClipCustomized && (
-                <span className="text-[9px] text-red-400 font-mono font-bold bg-red-950/80 px-1.5 py-0.5 rounded border border-red-800/60">
-                  Clip #{selectedClipIndex! + 1}
-                </span>
-              )}
-            </span>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                id="player-banner-toggle-checkbox"
-                type="checkbox"
-                checked={activePlayerBanner.enabled}
-                onChange={(e) => updateActivePlayerBanner('enabled', e.target.checked)}
-                className="sr-only peer"
-              />
-              <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-600"></div>
-            </label>
-          </div>
-
-          {activePlayerBanner.enabled && (
-            <div className="space-y-3 pt-1 text-xs">
-              {/* Roster Picker & Memory */}
-              <PlayerRosterPicker
-                currentName={activePlayerBanner.playerName}
-                currentNumber={activePlayerBanner.jerseyNumber}
-                currentAction={activePlayerBanner.actionText}
-                onSelectPlayer={({ name, jerseyNumber, defaultAction }) => {
-                  updateActivePlayerBanner('playerName', name);
-                  updateActivePlayerBanner('jerseyNumber', jerseyNumber);
-                  if (defaultAction) {
-                    updateActivePlayerBanner('actionText', defaultAction);
-                  }
-                }}
-              />
-
-              <div className="grid grid-cols-4 gap-2">
-                <div className="col-span-1">
-                  <label className="text-[10px] text-slate-400 uppercase font-semibold">No.</label>
-                  <input
-                    type="text"
-                    maxLength={3}
-                    value={activePlayerBanner.jerseyNumber}
-                    onChange={(e) => {
-                      updateActivePlayerBanner('jerseyNumber', e.target.value);
-                      if (activePlayerBanner.playerName) {
-                        autoRememberPlayer(activePlayerBanner.playerName, e.target.value, activePlayerBanner.actionText);
-                      }
-                    }}
-                    className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-white font-black text-center mt-0.5"
-                    placeholder="97"
-                  />
-                </div>
-                <div className="col-span-3">
-                  <label className="text-[10px] text-slate-400 uppercase font-semibold">Player Name</label>
-                  <input
-                    type="text"
-                    list="hockey-saved-players-datalist"
-                    value={activePlayerBanner.playerName}
-                    onChange={(e) => updateActivePlayerBanner('playerName', e.target.value)}
-                    onBlur={(e) => {
-                      if (e.target.value.trim()) {
-                        autoRememberPlayer(e.target.value, activePlayerBanner.jerseyNumber, activePlayerBanner.actionText);
-                      }
-                    }}
-                    className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-white font-semibold mt-0.5"
-                    placeholder="e.g. Connor McDavid"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] text-slate-400 uppercase font-semibold">Action Highlight Text</label>
-                <input
-                  type="text"
-                  value={activePlayerBanner.actionText}
-                  onChange={(e) => updateActivePlayerBanner('actionText', e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-sky-400 font-medium mt-0.5"
-                  placeholder="Top Shelf Snapper (Game Winner)"
-                />
-              </div>
-            </div>
-          )}
-        </div>
+        <button
+          type="button"
+          onClick={() => setActiveTab('fx')}
+          className={`py-1.5 px-2.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
+            activeTab === 'fx'
+              ? 'bg-red-600 text-white shadow-sm shadow-red-950/40'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+          title="Red Siren Light and Broadcast Stamps"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+          <span className="hidden sm:inline">FX</span>
+        </button>
       </div>
 
-      {/* Goal Horn Sound & Custom Horn Section */}
-      <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-4 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/70 pb-3">
-          <div className="flex items-center gap-2">
-            <Volume2 className="w-4 h-4 text-red-500" />
-            <span className="text-xs font-bold text-white uppercase tracking-wider">
-              Goal Horn &amp; Arena Sound FX
-            </span>
-            <span
-              className={`text-[10px] px-2 py-0.5 rounded font-semibold border ${
-                hornConfig.useCustomHorn && hornConfig.customHornName
-                  ? 'bg-purple-950 text-purple-300 border-purple-800'
-                  : 'bg-slate-900 text-slate-300 border-slate-700'
-              }`}
-            >
-              {hornConfig.useCustomHorn && hornConfig.customHornName ? 'Custom Horn Audio' : 'Arena Synthesizer Horn'}
-            </span>
-          </div>
-
-          <label className="relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              checked={hornConfig.enabled}
-              onChange={(e) => updateHornConfig({ enabled: e.target.checked })}
-              className="sr-only peer"
-            />
-            <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-600"></div>
-          </label>
-        </div>
-
-        {hornConfig.enabled && (
-          <div className="space-y-4 text-xs">
-            {/* Audio Source Switcher: Synth vs Custom */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => updateHornConfig({ useCustomHorn: false })}
-                className={`p-3 rounded-lg border text-left transition flex items-start gap-2.5 ${
-                  !hornConfig.useCustomHorn
-                    ? 'bg-slate-900 border-red-600/70 text-white shadow-sm'
-                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                }`}
-              >
-                <div
-                  className={`w-3.5 h-3.5 rounded-full border mt-0.5 flex items-center justify-center shrink-0 ${
-                    !hornConfig.useCustomHorn ? 'border-red-500 bg-red-600' : 'border-slate-600'
-                  }`}
-                >
-                  {!hornConfig.useCustomHorn && <div className="w-1.5 h-1.5 rounded-full bg-white"></div>}
-                </div>
-                <div>
-                  <div className="font-bold text-white text-xs">NHL Arena Synthesizer Horn</div>
-                  <div className="text-[11px] text-slate-400 mt-0.5 leading-snug">
-                    Classic NHL dual-tone stadium brass horn with authentic crowd roar
-                  </div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => updateHornConfig({ useCustomHorn: true })}
-                className={`p-3 rounded-lg border text-left transition flex items-start gap-2.5 ${
-                  hornConfig.useCustomHorn
-                    ? 'bg-slate-900 border-purple-500/70 text-white shadow-sm'
-                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                }`}
-              >
-                <div
-                  className={`w-3.5 h-3.5 rounded-full border mt-0.5 flex items-center justify-center shrink-0 ${
-                    hornConfig.useCustomHorn ? 'border-purple-500 bg-purple-600' : 'border-slate-600'
-                  }`}
-                >
-                  {hornConfig.useCustomHorn && <div className="w-1.5 h-1.5 rounded-full bg-white"></div>}
-                </div>
-                <div>
-                  <div className="font-bold text-white text-xs">My Custom Horn Audio File</div>
-                  <div className="text-[11px] text-slate-400 mt-0.5 leading-snug">
-                    Upload your own team&apos;s horn recording (MP3, WAV, OGG, M4A)
-                  </div>
-                </div>
-              </button>
+      {/* Tab Panels: Scrollable within pane without expanding overall page height */}
+      <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1 space-y-3">
+        {/* ==================== TAB 1: SCOREBUG ==================== */}
+        {activeTab === 'scorebug' && (
+          <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 sm:p-3.5 space-y-3">
+            {/* Header & On/Off Toggle */}
+            <div className="flex items-center justify-between border-b border-slate-800/60 pb-2">
+              <div className="flex items-center gap-1.5">
+                <Shield className="w-4 h-4 text-sky-400" />
+                <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                  Game Scorebug
+                </span>
+                {isEditingClip && isClipCustomized && (
+                  <span className="text-[9px] text-sky-400 font-mono font-bold bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/60">
+                    Clip #{selectedClipIndex! + 1}
+                  </span>
+                )}
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  id="scorebug-toggle-checkbox"
+                  type="checkbox"
+                  checked={activeScorebug.enabled}
+                  onChange={(e) => updateActiveScorebug('enabled', e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-8 h-4.5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-red-600"></div>
+              </label>
             </div>
 
-            {/* Custom Horn File Upload / Management */}
-            {hornConfig.useCustomHorn && (
-              <div className="bg-slate-900/90 border border-purple-900/40 rounded-xl p-3.5 space-y-3">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.webm"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleUploadCustomHorn(file);
-                    e.target.value = '';
-                  }}
-                />
+            {activeScorebug.enabled && (
+              <div className="space-y-3 pt-0.5 text-xs">
+                {/* Scorebug Memory & Quick Inheritance Bar */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2 flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                    <span className="font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-1">
+                      <Bookmark className="w-3 h-3 text-amber-400" />
+                      Game Scorebug Memory:
+                    </span>
+                    {selectedClipIndex === 0 && (
+                      <span className="text-amber-400 font-bold bg-amber-950/60 px-1.5 py-0.2 rounded border border-amber-800/60">
+                        Primary Game Anchor
+                      </span>
+                    )}
+                  </div>
 
-                {hornConfig.customHornName ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-950 border border-slate-800 p-3 rounded-lg">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-purple-600/20 border border-purple-500/50 flex items-center justify-center text-purple-400 shrink-0">
-                        <Music className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="font-bold text-white text-xs truncate max-w-[240px]">
-                          {hornConfig.customHornName}
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {hornConfig.customHornDuration
-                            ? `${hornConfig.customHornDuration.toFixed(1)}s duration`
-                            : 'Audio ready'}
-                        </div>
-                      </div>
+                  {/* Actions depending on scope */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {/* Clip #1: Button to save / set as game default for all clips */}
+                    {selectedClipIndex === 0 && (
+                      <button
+                        type="button"
+                        id="save-clip1-as-game-default-btn"
+                        onClick={handleApplyClip1AsGameDefault}
+                        className="text-[11px] bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/60 px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 transition cursor-pointer"
+                        title="Save Clip #1 teams & clock as the master default for the entire highlight video"
+                      >
+                        <Check className="w-3 h-3 text-amber-400" />
+                        <span>Sync Clip #1 Teams as Game Default</span>
+                      </button>
+                    )}
+
+                    {/* Clip #2, #3, etc.: Copy from Clip #1 */}
+                    {isEditingClip && selectedClipIndex! > 0 && (
+                      <button
+                        type="button"
+                        id="copy-from-clip1-btn"
+                        onClick={handleCopyFromClip1}
+                        className="text-[11px] bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 px-2.5 py-1 rounded-md font-medium flex items-center gap-1 transition cursor-pointer"
+                        title="Copy game teams and clock from Clip #1"
+                      >
+                        <Copy className="w-3 h-3 text-sky-400" />
+                        <span>
+                          Copy Teams from Clip #1 ({firstClipScorebug.awayTeam} vs {firstClipScorebug.homeTeam})
+                        </span>
+                      </button>
+                    )}
+
+                    {/* Clip #2, #3, etc.: Carry over ending score from preceding clip */}
+                    {isEditingClip && selectedClipIndex! > 0 && (
+                      <button
+                        type="button"
+                        id="carry-over-score-btn"
+                        onClick={handleCarryOverFromPrevClip}
+                        className="text-[11px] bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/60 px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 transition cursor-pointer"
+                        title="Carry over the score from Clip #{selectedClipIndex} so you can just increment the new goal (+1)"
+                      >
+                        <ArrowRight className="w-3 h-3 text-sky-400" />
+                        <span>
+                          Carry Over Score from Clip #{selectedClipIndex} ({prevClipScorebug.awayScore}-{prevClipScorebug.homeScore})
+                        </span>
+                      </button>
+                    )}
+
+                    {/* Global Scope: Option to sync with Clip #1 if Clip #1 is customized */}
+                    {!isEditingClip && clips.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleCopyFromClip1}
+                        className="text-[11px] bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 px-2.5 py-1 rounded-md font-medium flex items-center gap-1 transition cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3 text-sky-400" />
+                        <span>Copy Teams from Clip #1 ({firstClipScorebug.awayTeam} vs {firstClipScorebug.homeTeam})</span>
+                      </button>
+                    )}
+
+                    {/* Restore saved game teams from storage if available */}
+                    {rememberedGame && (
+                      <button
+                        type="button"
+                        onClick={handleRestoreRememberedGame}
+                        className="text-[10px] bg-slate-800/80 hover:bg-slate-750 text-slate-300 border border-slate-700/80 px-2 py-0.5 rounded flex items-center gap-1 transition cursor-pointer"
+                        title={`Restore saved game: ${rememberedGame.awayTeam} vs ${rememberedGame.homeTeam}`}
+                      >
+                        <RotateCcw className="w-2.5 h-2.5 text-slate-400" />
+                        <span>Restore Saved Game ({rememberedGame.awayTeam} vs {rememberedGame.homeTeam})</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Score Controls with + and - Buttons */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Away Team & Stepper */}
+                  <div className="bg-slate-900/90 border border-slate-800/90 rounded-xl p-2.5 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">
+                        Away Team &amp; Score
+                      </label>
+                      <span className="text-[10px] text-slate-500 font-mono">Visitor</span>
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={toggleAuditionHorn}
-                        className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition shadow"
-                      >
-                        {isPlayingHorn ? <Square className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-                        {isPlayingHorn ? 'Stop' : 'Play Horn'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 rounded-lg text-xs border border-slate-700 transition"
-                      >
-                        Replace
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleRemoveCustomHorn}
-                        title="Remove custom horn"
-                        className="text-slate-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-slate-800 transition"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <input
+                        type="text"
+                        maxLength={24}
+                        list="hockey-popular-teams-datalist"
+                        value={activeScorebug.awayTeam}
+                        onChange={(e) => updateActiveScorebug('awayTeam', e.target.value.toUpperCase())}
+                        className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-black text-sm tracking-wider"
+                        placeholder="BOS, EDMONTON"
+                      />
+
+                      {/* Score Stepper (- and +) */}
+                      <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5 shrink-0 shadow-inner">
+                        <button
+                          type="button"
+                          id="away-score-minus-btn"
+                          onClick={() => stepScore('awayScore', -1)}
+                          className="w-7 h-7 rounded-md bg-slate-850 hover:bg-slate-750 active:bg-slate-700 text-slate-200 flex items-center justify-center font-bold text-sm transition cursor-pointer border border-slate-700/50 select-none"
+                          title="Decrease away score (-1)"
+                        >
+                          <Minus className="w-3.5 h-3.5" />
+                        </button>
+                        <input
+                          type="number"
+                          min={0}
+                          max={99}
+                          value={activeScorebug.awayScore ?? 0}
+                          onChange={(e) =>
+                            updateActiveScorebug('awayScore', Math.max(0, parseInt(e.target.value) || 0))
+                          }
+                          className="w-10 bg-transparent text-sky-400 font-black text-center text-sm font-mono focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        />
+                        <button
+                          type="button"
+                          id="away-score-plus-btn"
+                          onClick={() => stepScore('awayScore', 1)}
+                          className="w-7 h-7 rounded-md bg-slate-850 hover:bg-slate-750 active:bg-slate-700 text-slate-200 flex items-center justify-center font-bold text-sm transition cursor-pointer border border-slate-700/50 select-none"
+                          title="Increase away score (+1)"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
-                ) : (
-                  <div
-                    onClick={() => fileInputRef.current?.click()}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      const file = e.dataTransfer.files?.[0];
-                      if (file) handleUploadCustomHorn(file);
-                    }}
-                    className="border-2 border-dashed border-slate-700 hover:border-purple-500 bg-slate-950/60 p-4 rounded-xl flex flex-col items-center justify-center gap-2 cursor-pointer transition text-center group"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-purple-600/10 group-hover:bg-purple-600/20 text-purple-400 flex items-center justify-center transition">
-                      <UploadCloud className="w-5 h-5" />
+
+                  {/* Home Team & Stepper */}
+                  <div className="bg-slate-900/90 border border-slate-800/90 rounded-xl p-2.5 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">
+                        Home Team &amp; Score
+                      </label>
+                      <span className="text-[10px] text-slate-500 font-mono">Host</span>
                     </div>
-                    <div>
-                      <span className="font-bold text-white text-xs">Click to upload your goal horn audio</span>
-                      <p className="text-[10px] text-slate-400 mt-0.5">
-                        Supports MP3, WAV, OGG, AAC, or M4A arena recordings
-                      </p>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        maxLength={24}
+                        list="hockey-popular-teams-datalist"
+                        value={activeScorebug.homeTeam}
+                        onChange={(e) => updateActiveScorebug('homeTeam', e.target.value.toUpperCase())}
+                        className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-black text-sm tracking-wider"
+                        placeholder="NYR, FLORIDA"
+                      />
+
+                      {/* Score Stepper (- and +) */}
+                      <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5 shrink-0 shadow-inner">
+                        <button
+                          type="button"
+                          id="home-score-minus-btn"
+                          onClick={() => stepScore('homeScore', -1)}
+                          className="w-7 h-7 rounded-md bg-slate-850 hover:bg-slate-750 active:bg-slate-700 text-slate-200 flex items-center justify-center font-bold text-sm transition cursor-pointer border border-slate-700/50 select-none"
+                          title="Decrease home score (-1)"
+                        >
+                          <Minus className="w-3.5 h-3.5" />
+                        </button>
+                        <input
+                          type="number"
+                          min={0}
+                          max={99}
+                          value={activeScorebug.homeScore ?? 0}
+                          onChange={(e) =>
+                            updateActiveScorebug('homeScore', Math.max(0, parseInt(e.target.value) || 0))
+                          }
+                          className="w-10 bg-transparent text-sky-400 font-black text-center text-sm font-mono focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        />
+                        <button
+                          type="button"
+                          id="home-score-plus-btn"
+                          onClick={() => stepScore('homeScore', 1)}
+                          className="w-7 h-7 rounded-md bg-slate-850 hover:bg-slate-750 active:bg-slate-700 text-slate-200 flex items-center justify-center font-bold text-sm transition cursor-pointer border border-slate-700/50 select-none"
+                          title="Increase home score (+1)"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
-                )}
+                </div>
+
+                {/* Period & Clock Controls */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-slate-400 uppercase font-semibold">Period</label>
+                    <select
+                      value={activeScorebug.period}
+                      onChange={(e) => updateActiveScorebug('period', e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white text-xs mt-0.5 font-bold"
+                    >
+                      <option value="1ST">1st Period</option>
+                      <option value="2ND">2nd Period</option>
+                      <option value="3RD">3rd Period</option>
+                      <option value="OT">Overtime (OT)</option>
+                      <option value="2OT">2nd OT</option>
+                      <option value="SO">Shootout (SO)</option>
+                      <option value="FINAL">Final</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-slate-400 uppercase font-semibold">Game Clock</label>
+                    <input
+                      type="text"
+                      value={activeScorebug.timeRemaining}
+                      onChange={(e) => updateActiveScorebug('timeRemaining', e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-mono text-center mt-0.5 font-bold"
+                      placeholder="0:14"
+                    />
+                  </div>
+                </div>
+
+                {/* Datalist of common NHL team abbreviations */}
+                <datalist id="hockey-popular-teams-datalist">
+                  <option value="EDMONTON" />
+                  <option value="FLORIDA" />
+                  <option value="NYR" />
+                  <option value="BOS" />
+                  <option value="TOR" />
+                  <option value="COL" />
+                  <option value="DAL" />
+                  <option value="VGK" />
+                  <option value="CAR" />
+                  <option value="TBL" />
+                  <option value="VAN" />
+                  <option value="WPG" />
+                  <option value="LAK" />
+                  <option value="NSH" />
+                  <option value="DET" />
+                  <option value="MTL" />
+                </datalist>
               </div>
             )}
+          </div>
+        )}
 
-            {/* Timing & Trigger Controls */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 space-y-3">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200 uppercase tracking-wider">
-                <Clock className="w-3.5 h-3.5 text-amber-400" />
-                Horn Trigger Timing in Video Clips
+        {/* ==================== TAB 2: PLAYER LOWER THIRD ==================== */}
+        {activeTab === 'player' && (
+          <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 sm:p-3.5 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-800/60 pb-2">
+              <div className="flex items-center gap-1.5">
+                <User className="w-4 h-4 text-red-400" />
+                <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                  Player Lower Third
+                </span>
+                {isEditingClip && isClipCustomized && (
+                  <span className="text-[9px] text-red-400 font-mono font-bold bg-red-950/80 px-1.5 py-0.5 rounded border border-red-800/60">
+                    Clip #{selectedClipIndex! + 1}
+                  </span>
+                )}
               </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  id="player-banner-toggle-checkbox"
+                  type="checkbox"
+                  checked={activePlayerBanner.enabled}
+                  onChange={(e) => updateActivePlayerBanner('enabled', e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-8 h-4.5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-red-600"></div>
+              </label>
+            </div>
 
-              {/* Mode: Every Clip vs Goal Clips Only */}
-              <div>
-                <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-1.5">
-                  Trigger When:
-                </label>
+            {activePlayerBanner.enabled && (
+              <div className="space-y-3 pt-0.5 text-xs">
+                {/* Roster Picker & Memory */}
+                <PlayerRosterPicker
+                  currentName={activePlayerBanner.playerName}
+                  currentNumber={activePlayerBanner.jerseyNumber}
+                  currentAction={activePlayerBanner.actionText}
+                  onSelectPlayer={({ name, jerseyNumber, defaultAction }) => {
+                    updateActivePlayerBanner('playerName', name);
+                    updateActivePlayerBanner('jerseyNumber', jerseyNumber);
+                    if (defaultAction) {
+                      updateActivePlayerBanner('actionText', defaultAction);
+                    }
+                  }}
+                />
+
+                <div className="grid grid-cols-4 gap-2">
+                  <div className="col-span-1">
+                    <label className="text-[10px] text-slate-400 uppercase font-semibold">No.</label>
+                    <input
+                      type="text"
+                      maxLength={3}
+                      value={activePlayerBanner.jerseyNumber}
+                      onChange={(e) => {
+                        updateActivePlayerBanner('jerseyNumber', e.target.value);
+                        if (activePlayerBanner.playerName) {
+                          autoRememberPlayer(activePlayerBanner.playerName, e.target.value, activePlayerBanner.actionText);
+                        }
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-white font-black text-center mt-0.5 font-mono"
+                      placeholder="97"
+                    />
+                  </div>
+                  <div className="col-span-3">
+                    <label className="text-[10px] text-slate-400 uppercase font-semibold">Player Name</label>
+                    <input
+                      type="text"
+                      list="hockey-saved-players-datalist"
+                      value={activePlayerBanner.playerName}
+                      onChange={(e) => updateActivePlayerBanner('playerName', e.target.value)}
+                      onBlur={(e) => {
+                        if (e.target.value.trim()) {
+                          autoRememberPlayer(e.target.value, activePlayerBanner.jerseyNumber, activePlayerBanner.actionText);
+                        }
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-semibold mt-0.5"
+                      placeholder="e.g. Connor McDavid"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-slate-400 uppercase font-semibold">Action Highlight Text</label>
+                  <input
+                    type="text"
+                    value={activePlayerBanner.actionText}
+                    onChange={(e) => updateActivePlayerBanner('actionText', e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-sky-400 font-medium mt-0.5"
+                    placeholder="Top Shelf Snapper (Game Winner)"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ==================== TAB 3: GOAL HORN & SOUND FX ==================== */}
+        {activeTab === 'horn' && (
+          <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 sm:p-3.5 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-800/60 pb-2">
+              <div className="flex items-center gap-1.5">
+                <Volume2 className="w-4 h-4 text-amber-400" />
+                <span className="text-xs font-bold text-white uppercase tracking-wider">
+                  Goal Horn &amp; Arena Audio
+                </span>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={hornConfig.enabled}
+                  onChange={(e) => updateHornConfig({ enabled: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-8 h-4.5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-red-600"></div>
+              </label>
+            </div>
+
+            {hornConfig.enabled && (
+              <div className="space-y-3 pt-0.5 text-xs">
+                {/* Audio Source Switcher: Synth vs Custom */}
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => updateHornConfig({ triggerMode: 'every_clip' })}
-                    className={`py-2 px-3 rounded-lg border text-xs font-semibold transition text-left flex items-center justify-between ${
-                      hornConfig.triggerMode === 'every_clip'
-                        ? 'bg-red-600/20 border-red-500 text-white font-bold'
+                    onClick={() => updateHornConfig({ useCustomHorn: false })}
+                    className={`p-2.5 rounded-lg border text-left transition flex items-start gap-2 cursor-pointer ${
+                      !hornConfig.useCustomHorn
+                        ? 'bg-slate-900 border-red-600/70 text-white shadow-xs'
                         : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
                     }`}
                   >
-                    <span>Play in Every Video Clip</span>
-                    {hornConfig.triggerMode === 'every_clip' && (
-                      <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                    )}
+                    <div
+                      className={`w-3.5 h-3.5 rounded-full border mt-0.5 flex items-center justify-center shrink-0 ${
+                        !hornConfig.useCustomHorn ? 'border-red-500 bg-red-600' : 'border-slate-600'
+                      }`}
+                    >
+                      {!hornConfig.useCustomHorn && <div className="w-1.5 h-1.5 rounded-full bg-white"></div>}
+                    </div>
+                    <div>
+                      <div className="font-bold text-xs text-white">NHL Synth Horn</div>
+                      <div className="text-[10px] text-slate-400">Authentic brass horn</div>
+                    </div>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => updateHornConfig({ triggerMode: 'goal_clips_only' })}
-                    className={`py-2 px-3 rounded-lg border text-xs font-semibold transition text-left flex items-center justify-between ${
-                      hornConfig.triggerMode === 'goal_clips_only'
-                        ? 'bg-red-600/20 border-red-500 text-white font-bold'
+                    onClick={() => updateHornConfig({ useCustomHorn: true })}
+                    className={`p-2.5 rounded-lg border text-left transition flex items-start gap-2 cursor-pointer ${
+                      hornConfig.useCustomHorn
+                        ? 'bg-slate-900 border-purple-500/70 text-white shadow-xs'
                         : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
                     }`}
                   >
-                    <span>Only on Clips Tagged &quot;GOAL&quot;</span>
-                    {hornConfig.triggerMode === 'goal_clips_only' && (
-                      <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                    <div
+                      className={`w-3.5 h-3.5 rounded-full border mt-0.5 flex items-center justify-center shrink-0 ${
+                        hornConfig.useCustomHorn ? 'border-purple-500 bg-purple-600' : 'border-slate-600'
+                      }`}
+                    >
+                      {hornConfig.useCustomHorn && <div className="w-1.5 h-1.5 rounded-full bg-white"></div>}
+                    </div>
+                    <div>
+                      <div className="font-bold text-xs text-white">Custom Horn File</div>
+                      <div className="text-[10px] text-slate-400">Upload your arena MP3</div>
+                    </div>
+                  </button>
+                </div>
+
+                {/* Custom file uploader if custom is selected */}
+                {hornConfig.useCustomHorn && (
+                  <div className="bg-purple-950/30 border border-purple-900/50 rounded-lg p-2.5 space-y-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="audio/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleUploadCustomHorn(file);
+                      }}
+                      className="hidden"
+                    />
+
+                    {hornConfig.customHornName ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Music className="w-4 h-4 text-purple-400 shrink-0" />
+                          <span className="truncate text-purple-200 font-semibold text-xs">
+                            {hornConfig.customHornName}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleRemoveCustomHorn}
+                          className="text-red-400 hover:text-red-300 p-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full py-2 border border-dashed border-purple-500/50 hover:border-purple-400 rounded-lg text-purple-300 font-semibold flex items-center justify-center gap-1.5 text-xs transition"
+                      >
+                        <UploadCloud className="w-3.5 h-3.5" />
+                        <span>Choose MP3 / WAV Audio File</span>
+                      </button>
                     )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Horn Sound Duration (Extended Limit & Customizable) */}
-              <div className="space-y-1.5 pt-2 border-t border-slate-800">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-slate-300 font-semibold flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-red-400" />
-                    Horn Sound Duration:
-                  </span>
-                  <span className="font-mono text-red-400 font-bold bg-slate-950 border border-slate-800 px-2 py-0.5 rounded">
-                    {(hornConfig.hornDuration ?? 5.0).toFixed(1)}s blare
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min={1.0}
-                    max={30.0}
-                    step={0.5}
-                    value={hornConfig.hornDuration ?? 5.0}
-                    onChange={(e) =>
-                      updateHornConfig({ hornDuration: parseFloat(e.target.value) || 5.0 })
-                    }
-                    className="w-full h-2 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-red-500"
-                  />
-                  <input
-                    type="number"
-                    min={1.0}
-                    max={60.0}
-                    step={0.5}
-                    value={hornConfig.hornDuration ?? 5.0}
-                    onChange={(e) =>
-                      updateHornConfig({
-                        hornDuration: Math.max(0.5, Math.min(60.0, parseFloat(e.target.value) || 5.0)),
-                      })
-                    }
-                    className="w-16 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-center font-mono text-red-400 text-xs font-bold"
-                  />
-                </div>
-
-                {/* Duration Presets (Extending past the previous 10s cap) */}
-                <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                  <span className="text-[10px] text-slate-500">Duration presets:</span>
-                  {[2.0, 3.0, 3.5, 5.0, 8.0, 10.0, 15.0, 20.0, 30.0].map((sec) => (
-                    <button
-                      key={sec}
-                      type="button"
-                      onClick={() => updateHornConfig({ hornDuration: sec })}
-                      className={`text-[10px] px-2 py-0.5 rounded border transition font-mono ${
-                        Math.abs((hornConfig.hornDuration ?? 5.0) - sec) < 0.2
-                          ? 'bg-red-500/20 border-red-500 text-red-300 font-bold'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      {sec}s
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[10px] text-slate-400 italic">
-                  Extended limit up to 60s. Controls how long the NHL arena synthesizer or custom horn blares.
-                </p>
-              </div>
-
-              {/* Specific Offset Seconds in Clip (Extended Limit) */}
-              <div className="space-y-1.5 pt-2 border-t border-slate-800">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-slate-300 font-semibold">
-                    Trigger Timestamp in Clip:
-                  </span>
-                  <span className="font-mono text-amber-400 font-bold bg-slate-950 border border-slate-800 px-2 py-0.5 rounded">
-                    {hornConfig.clipOffsetSeconds.toFixed(1)}s into clip
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min={0}
-                    max={30.0}
-                    step={0.1}
-                    value={hornConfig.clipOffsetSeconds}
-                    onChange={(e) =>
-                      updateHornConfig({ clipOffsetSeconds: parseFloat(e.target.value) || 0 })
-                    }
-                    className="w-full h-2 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    max={60.0}
-                    step={0.1}
-                    value={hornConfig.clipOffsetSeconds}
-                    onChange={(e) =>
-                      updateHornConfig({
-                        clipOffsetSeconds: Math.max(0, Math.min(60.0, parseFloat(e.target.value) || 0)),
-                      })
-                    }
-                    className="w-16 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-center font-mono text-amber-400 text-xs font-bold"
-                  />
-                </div>
-
-                {/* Quick Preset Buttons */}
-                <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                  <span className="text-[10px] text-slate-500">Trigger presets:</span>
-                  {[0.0, 0.5, 1.0, 2.0, 3.5, 5.0, 10.0].map((sec) => (
-                    <button
-                      key={sec}
-                      type="button"
-                      onClick={() => updateHornConfig({ clipOffsetSeconds: sec })}
-                      className={`text-[10px] px-2 py-0.5 rounded border transition font-mono ${
-                        Math.abs(hornConfig.clipOffsetSeconds - sec) < 0.05
-                          ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      {sec === 0.0 ? '0.0s (Start)' : `${sec.toFixed(1)}s`}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[10px] text-slate-400 italic">
-                  Horn will sound automatically {hornConfig.clipOffsetSeconds.toFixed(1)} seconds after each clip begins.
-                </p>
-              </div>
-
-              {/* Native Video Horn & Audio Handling */}
-              <div className="space-y-2.5 pt-2 border-t border-slate-800">
-                <div className="text-xs font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-                  <Volume2 className="w-3.5 h-3.5 text-sky-400" />
-                  Native Video Audio & Conflict Prevention
-                </div>
-
-                <label className="flex items-start gap-2.5 cursor-pointer bg-slate-950 p-2.5 rounded-lg border border-slate-800 hover:border-slate-700 transition">
-                  <input
-                    type="checkbox"
-                    checked={hornConfig.skipClipsWithNativeHorn ?? true}
-                    onChange={(e) =>
-                      updateHornConfig({ skipClipsWithNativeHorn: e.target.checked })
-                    }
-                    className="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0 w-4 h-4 cursor-pointer mt-0.5"
-                  />
-                  <div className="flex-1 text-xs">
-                    <span className="font-semibold text-slate-200">
-                      Skip overlay horn on clips that have native arena audio
-                    </span>
-                    <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-                      If a clip is tagged with native horn in Trim & Edit, the app will suppress the overlay horn to prevent duplicate or clashing sounds.
-                    </p>
                   </div>
-                </label>
+                )}
 
-                <label className="flex items-start gap-2.5 cursor-pointer bg-slate-950 p-2.5 rounded-lg border border-slate-800 hover:border-slate-700 transition">
-                  <input
-                    type="checkbox"
-                    checked={hornConfig.duckVideoAudio ?? true}
-                    onChange={(e) =>
-                      updateHornConfig({ duckVideoAudio: e.target.checked })
-                    }
-                    className="rounded bg-slate-900 border-slate-700 text-red-500 focus:ring-0 w-4 h-4 cursor-pointer mt-0.5"
-                  />
-                  <div className="flex-1 text-xs">
-                    <span className="font-semibold text-slate-200">
-                      Duck native video audio while horn sounds
+                {/* Duration Slider */}
+                <div className="space-y-1 pt-1 border-t border-slate-800">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-300 font-semibold flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-red-400" />
+                      Horn Duration:
                     </span>
-                    <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-                      Temporarily lowers video background sound so the goal horn blasts with full arena clarity without fighting crowd noise.
-                    </p>
+                    <span className="font-mono text-red-400 font-bold bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                      {(hornConfig.hornDuration ?? 5.0).toFixed(1)}s blare
+                    </span>
                   </div>
-                </label>
-              </div>
-
-              {/* Volume Slider & Audition */}
-              <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2 flex-1 min-w-[180px]">
-                  <Volume2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                  <span className="text-[11px] text-slate-300 font-semibold">Volume:</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1.5}
-                    step={0.05}
-                    value={hornConfig.volume}
-                    onChange={(e) => updateHornConfig({ volume: parseFloat(e.target.value) || 1 })}
-                    className="w-24 h-1.5 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-red-500"
-                  />
-                  <span className="text-[11px] font-mono text-slate-400">
-                    {Math.round(hornConfig.volume * 100)}%
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={1.0}
+                      max={30.0}
+                      step={0.5}
+                      value={hornConfig.hornDuration ?? 5.0}
+                      onChange={(e) =>
+                        updateHornConfig({ hornDuration: parseFloat(e.target.value) || 5.0 })
+                      }
+                      className="w-full h-1.5 bg-slate-950 rounded appearance-none cursor-pointer accent-red-500"
+                    />
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={toggleAuditionHorn}
-                    className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 transition flex items-center gap-1.5 font-medium"
-                  >
-                    {isPlayingHorn ? <Square className="w-3 h-3 fill-current text-red-400" /> : <Play className="w-3 h-3 fill-current text-emerald-400" />}
-                    {isPlayingHorn ? 'Stop Audio' : 'Audition Horn'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => playArenaBuzzer(1.0)}
-                    className="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1.5 rounded-lg border border-slate-700 transition"
-                  >
-                    Buzzer
-                  </button>
+                {/* Volume Slider & Audition */}
+                <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 flex-1">
+                    <Volume2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <input
+                      type="range"
+                      min={0}
+                      max={1.5}
+                      step={0.05}
+                      value={hornConfig.volume}
+                      onChange={(e) => updateHornConfig({ volume: parseFloat(e.target.value) || 1 })}
+                      className="w-20 h-1.5 bg-slate-950 rounded appearance-none cursor-pointer accent-red-500"
+                    />
+                    <span className="text-[10px] font-mono text-slate-400">
+                      {Math.round(hornConfig.volume * 100)}%
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={toggleAuditionHorn}
+                      className="text-[11px] bg-slate-800 hover:bg-slate-750 text-slate-200 px-2.5 py-1 rounded-lg border border-slate-700 transition flex items-center gap-1 font-medium cursor-pointer"
+                    >
+                      {isPlayingHorn ? (
+                        <Square className="w-3 h-3 fill-current text-red-400" />
+                      ) : (
+                        <Play className="w-3 h-3 fill-current text-emerald-400" />
+                      )}
+                      <span>{isPlayingHorn ? 'Stop' : 'Audition'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => playArenaBuzzer(1.0)}
+                      className="text-[11px] bg-slate-800 hover:bg-slate-750 text-slate-300 px-2 py-1 rounded-lg border border-slate-700 transition cursor-pointer"
+                    >
+                      Buzzer
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         )}
-      </div>
 
-      {/* Badges & Stamps toggle */}
-      <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.showStamps}
-            onChange={(e) => onChange({ ...settings, showStamps: e.target.checked })}
-            className="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0 w-4 h-4 cursor-pointer"
-          />
-          <span className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-sky-400" />
-            Show Action Badges (GOAL / SAVE / HIT)
-          </span>
-        </label>
+        {/* ==================== TAB 4: FX, SIREN & STAMPS ==================== */}
+        {activeTab === 'fx' && (
+          <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 sm:p-3.5 space-y-3 text-xs">
+            <div className="border-b border-slate-800/60 pb-2">
+              <span className="font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-sky-400" />
+                Visual Broadcast FX
+              </span>
+            </div>
+
+            <label className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
+              <div className="space-y-0.5">
+                <span className="text-slate-200 font-bold flex items-center gap-1.5">
+                  <Flame className="w-3.5 h-3.5 text-red-500" />
+                  Red Siren Goal Light Flash
+                </span>
+                <p className="text-[11px] text-slate-400">
+                  Flashes stadium red alert flare when a goal is scored
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings.sirenFlash}
+                onChange={(e) => onChange({ ...settings, sirenFlash: e.target.checked })}
+                className="rounded bg-slate-950 border-slate-700 text-red-500 focus:ring-0 w-4 h-4 cursor-pointer"
+              />
+            </label>
+
+            <label className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
+              <div className="space-y-0.5">
+                <span className="text-slate-200 font-bold flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-sky-400" />
+                  Action Badges (GOAL / SAVE / HIT)
+                </span>
+                <p className="text-[11px] text-slate-400">
+                  Shows high-impact broadcast action badges on screen
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings.showStamps}
+                onChange={(e) => onChange({ ...settings, showStamps: e.target.checked })}
+                className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-0 w-4 h-4 cursor-pointer"
+              />
+            </label>
+          </div>
+        )}
       </div>
     </div>
   );

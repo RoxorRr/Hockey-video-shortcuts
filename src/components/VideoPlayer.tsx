@@ -454,25 +454,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const canvasHeight = aspectRatio === '9:16' ? 1280 : aspectRatio === '1:1' ? 720 : 720;
 
   return (
-    <div className="flex flex-col items-center justify-center w-full h-full bg-slate-950/90 p-3 lg:p-6 rounded-2xl border border-slate-800/80 shadow-2xl relative overflow-hidden">
+    <div className="flex flex-col items-center justify-between w-full h-full bg-slate-950/90 p-2 sm:p-2.5 rounded-2xl border border-slate-800/80 shadow-2xl relative overflow-hidden min-h-0">
       {/* Background ice rink subtle ambient glow */}
       <div className="absolute inset-0 pointer-events-none opacity-20 bg-[radial-gradient(circle_at_50%_40%,#38bdf8_0%,transparent_60%)]"></div>
 
       {/* Main View Area */}
-      <div className="relative flex items-center justify-center w-full flex-1 min-h-[360px] max-h-[580px]">
+      <div className="relative flex items-center justify-center w-full flex-1 min-h-0 overflow-hidden">
         {clips.length === 0 ? (
           <div
             onClick={onOpenUploadDialog}
-            className="group flex flex-col items-center justify-center text-center p-8 sm:p-12 max-w-lg w-full border-2 border-dashed border-slate-700 hover:border-red-500 rounded-3xl bg-slate-900/60 hover:bg-slate-900/90 cursor-pointer transition-all duration-200 shadow-2xl"
+            className="group flex flex-col items-center justify-center text-center p-6 sm:p-8 max-w-md w-full border-2 border-dashed border-slate-700 hover:border-red-500 rounded-2xl bg-slate-900/60 hover:bg-slate-900/90 cursor-pointer transition-all duration-200 shadow-2xl my-auto"
           >
-            <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-red-600/20 to-sky-600/20 border border-red-500/30 group-hover:border-red-500 group-hover:scale-105 text-red-400 flex items-center justify-center mb-5 transition-all shadow-inner">
-              <Plus className="w-10 h-10 text-red-500" />
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-red-600/20 to-sky-600/20 border border-red-500/30 group-hover:border-red-500 group-hover:scale-105 text-red-400 flex items-center justify-center mb-3 transition-all shadow-inner">
+              <Plus className="w-7 h-7 text-red-500" />
             </div>
-            <h3 className="text-2xl font-black text-white font-['Chakra_Petch'] tracking-wide mb-2 uppercase">
+            <h3 className="text-xl font-black text-white font-['Chakra_Petch'] tracking-wide mb-1 uppercase">
               Ready for Your Hockey Videos
             </h3>
-            <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-sm">
-              Drag and drop your highlight video clips here or click anywhere in this box to upload (<span className="text-slate-300 font-mono">MP4, WebM, MOV</span>).
+            <p className="text-xs text-slate-400 mb-4 leading-relaxed max-w-xs">
+              Drag and drop hockey video clips here or click to upload (<span className="text-slate-300 font-mono">MP4, WebM, MOV</span>).
             </p>
             <button
               id="upload-my-videos-btn"
@@ -480,23 +480,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 e.stopPropagation();
                 onOpenUploadDialog();
               }}
-              className="flex items-center justify-center gap-2.5 bg-red-600 hover:bg-red-500 text-white px-6 py-3 rounded-xl text-sm font-bold uppercase tracking-wider transition shadow-xl shadow-red-950/60 font-['Chakra_Petch']"
+              className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-red-950/60 font-['Chakra_Petch']"
             >
-              <Plus className="w-5 h-5" />
+              <Plus className="w-4 h-4" />
               Upload Hockey Videos
             </button>
-            <p className="text-[11px] text-slate-500 mt-4">
-              Saved automatically in your browser — your project stays intact even if you refresh.
+            <p className="text-[10px] text-slate-500 mt-2">
+              Saved automatically in your browser — project stays intact even if refreshed.
             </p>
           </div>
         ) : (
           <div
-            className={`relative rounded-xl overflow-hidden shadow-2xl border-2 border-slate-800 bg-black flex items-center justify-center transition-all ${
+            className={`relative rounded-xl overflow-hidden shadow-2xl border-2 border-slate-800 bg-black flex items-center justify-center max-h-full transition-all ${
               aspectRatio === '9:16'
-                ? 'aspect-[9/16] h-full max-h-[540px]'
+                ? 'aspect-[9/16] h-full max-h-full'
                 : aspectRatio === '16:9'
-                ? 'aspect-[16/9] w-full max-w-[780px]'
-                : 'aspect-square h-full max-h-[500px]'
+                ? 'aspect-[16/9] w-full max-h-full'
+                : 'aspect-square h-full max-h-full'
             }`}
           >
             <canvas
@@ -512,14 +512,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <button
                 id="canvas-play-overlay-btn"
                 onClick={togglePlay}
-                className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-black/60 hover:bg-black/80 text-white border border-white/20 flex items-center justify-center transition backdrop-blur-xs scale-100 hover:scale-110"
+                className="absolute inset-0 m-auto w-14 h-14 rounded-full bg-black/60 hover:bg-black/80 text-white border border-white/20 flex items-center justify-center transition backdrop-blur-xs scale-100 hover:scale-110"
               >
-                <Play className="w-7 h-7 ml-1 text-red-500 fill-red-500" />
+                <Play className="w-6 h-6 ml-0.5 text-red-500 fill-red-500" />
               </button>
             )}
 
             {/* Top aspect ratio indicator pill */}
-            <div className="absolute top-3 right-3 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-md text-[11px] font-semibold text-slate-300 border border-white/10 tracking-wider">
+            <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-semibold text-slate-300 border border-white/10 tracking-wider">
               {aspectRatio === '9:16' ? '9:16 SHORTS' : aspectRatio === '16:9' ? '16:9 HD' : '1:1'}
             </div>
           </div>
@@ -528,10 +528,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Playback Controls & Timeline Scrubber */}
       {clips.length > 0 && (
-        <div className="w-full max-w-3xl mt-4 bg-slate-900/90 border border-slate-800/80 rounded-xl p-3 flex flex-col gap-2.5">
+        <div className="w-full max-w-2xl mt-1 bg-slate-900/90 border border-slate-800/80 rounded-xl px-2.5 py-1 flex flex-col gap-1 shrink-0">
           {/* Scrubber track */}
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-mono font-bold text-sky-400 min-w-[56px]">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-mono font-bold text-sky-400 min-w-[48px]">
               {formatTime(currentTime)}
             </span>
             <input
@@ -542,53 +542,53 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               step={0.05}
               value={Number.isFinite(currentTime) ? currentTime : 0}
               onChange={handleSeek}
-              className="flex-1 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
+              className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
             />
-            <span className="text-xs font-mono text-slate-400 min-w-[56px] text-right">
+            <span className="text-[11px] font-mono text-slate-400 min-w-[48px] text-right">
               {formatTime(totalDuration)}
             </span>
           </div>
 
           {/* Buttons row */}
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <button
                 id="player-restart-btn"
                 onClick={handleRestart}
                 title="Restart playback"
-                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
+                className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition"
               >
-                <RotateCcw className="w-4 h-4" />
+                <RotateCcw className="w-3.5 h-3.5" />
               </button>
 
               <button
                 id="player-play-btn"
                 onClick={togglePlay}
-                className="flex items-center justify-center w-9 h-9 rounded-lg bg-red-600 hover:bg-red-500 text-white transition shadow shadow-red-950/40"
+                className="flex items-center justify-center w-7 h-7 rounded-lg bg-red-600 hover:bg-red-500 text-white transition shadow shadow-red-950/40"
               >
-                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+                {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
               </button>
 
               <button
                 id="player-mute-btn"
                 onClick={() => setIsMuted(!isMuted)}
                 title={isMuted ? 'Unmute' : 'Mute'}
-                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
+                className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition"
               >
                 {isMuted ? (
-                  <VolumeX className="w-4 h-4 text-red-400" />
+                  <VolumeX className="w-3.5 h-3.5 text-red-400" />
                 ) : (
-                  <Volume2 className="w-4 h-4" />
+                  <Volume2 className="w-3.5 h-3.5" />
                 )}
               </button>
             </div>
 
-            <div className="flex items-center gap-2 text-xs text-slate-400 font-medium">
-              <span className="bg-slate-800/80 px-2 py-1 rounded border border-slate-700/60">
+            <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-medium">
+              <span className="bg-slate-800/80 px-1.5 py-0.5 rounded border border-slate-700/60">
                 {clips.length} {clips.length === 1 ? 'Clip' : 'Clips'}
               </span>
-              <span className="bg-slate-800/80 px-2 py-1 rounded border border-slate-700/60">
-                {transitions.length} {transitions.length === 1 ? 'Transition' : 'Transitions'}
+              <span className="bg-slate-800/80 px-1.5 py-0.5 rounded border border-slate-700/60">
+                {transitions.length} {transitions.length === 1 ? 'Trans' : 'Trans'}
               </span>
             </div>
           </div>
@@ -597,61 +597,63 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Zoom Feature Directly Below Video */}
       {clips.length > 0 && activeClip && onUpdateClip && (
-        <div className="w-full max-w-3xl mt-2.5 bg-slate-900/95 border border-slate-800/90 rounded-xl p-3 flex flex-col gap-2.5 shadow-lg shadow-black/40">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <ZoomIn className="w-4 h-4 text-amber-400 shrink-0" />
-              <span className="text-xs font-bold text-white uppercase tracking-wider font-['Chakra_Petch']">
-                Clip Zoom &amp; Framing
+        <div className="w-full max-w-2xl mt-1 bg-slate-900/95 border border-slate-800/90 rounded-lg px-2.5 py-1 flex flex-col gap-1 shrink-0 shadow-md shadow-black/40">
+          <div className="flex items-center justify-between gap-1 text-xs">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <ZoomIn className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="text-[10px] font-bold text-white uppercase tracking-wider font-['Chakra_Petch'] shrink-0">
+                Zoom &amp; Framing
               </span>
               <span
-                className="text-[11px] font-mono text-slate-300 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 truncate max-w-[150px]"
+                className="text-[10px] font-mono text-slate-300 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 truncate max-w-[110px]"
                 title={activeClip.name}
               >
                 {activeClip.name}
               </span>
               <span
-                className={`text-[10px] px-2 py-0.5 rounded font-bold border ${
+                className={`text-[9px] px-1.5 py-0.5 rounded font-bold border shrink-0 ${
                   (activeClip.zoom ?? 1) > 1.02
                     ? 'bg-amber-950/90 text-amber-300 border-amber-700/80'
                     : 'bg-slate-950 text-slate-400 border-slate-800'
                 }`}
               >
                 {(activeClip.zoom ?? 1) > 1.02
-                  ? `${(activeClip.zoom ?? 1).toFixed(2)}x Zoomed`
-                  : '1.0x Full Ice'}
+                  ? `${(activeClip.zoom ?? 1).toFixed(2)}x`
+                  : '1.0x Full'}
               </span>
             </div>
 
-            {((activeClip.zoom ?? 1) > 1.02 ||
-              (activeClip.panX ?? 0) !== 0 ||
-              (activeClip.panY ?? 0) !== 0) && (
-              <button
-                type="button"
-                onClick={() => {
-                  handleClipZoomChange(1.0);
-                  handleClipPanChange(0, 0);
-                }}
-                className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-white bg-slate-950 hover:bg-slate-800 px-2.5 py-1 rounded border border-slate-800 transition"
-              >
-                <RotateCcw className="w-3 h-3" />
-                Reset Framing
-              </button>
-            )}
+            <div className="flex items-center gap-1 shrink-0">
+              {((activeClip.zoom ?? 1) > 1.02 ||
+                (activeClip.panX ?? 0) !== 0 ||
+                (activeClip.panY ?? 0) !== 0) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleClipZoomChange(1.0);
+                    handleClipPanChange(0, 0);
+                  }}
+                  className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-white bg-slate-950 hover:bg-slate-800 px-1.5 py-0.5 rounded border border-slate-800 transition"
+                >
+                  <RotateCcw className="w-2.5 h-2.5" />
+                  Reset
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Slider & Presets Row */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
-            <div className="flex items-center gap-2 flex-1">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-1">
               <button
                 type="button"
                 title="Zoom Out (-0.2x)"
                 onClick={() =>
                   handleClipZoomChange(Math.max(1.0, (activeClip.zoom ?? 1) - 0.2))
                 }
-                className="p-1.5 rounded bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 transition"
+                className="p-1 rounded bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 transition"
               >
-                <ZoomOut className="w-3.5 h-3.5" />
+                <ZoomOut className="w-3 h-3" />
               </button>
               <input
                 type="range"
@@ -660,7 +662,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 step={0.05}
                 value={activeClip.zoom ?? 1.0}
                 onChange={(e) => handleClipZoomChange(parseFloat(e.target.value) || 1.0)}
-                className="flex-1 h-2 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                className="flex-1 h-1.5 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-amber-500"
               />
               <button
                 type="button"
@@ -668,29 +670,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 onClick={() =>
                   handleClipZoomChange(Math.min(3.5, (activeClip.zoom ?? 1) + 0.2))
                 }
-                className="p-1.5 rounded bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 transition"
+                className="p-1 rounded bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 transition"
               >
-                <ZoomIn className="w-3.5 h-3.5" />
+                <ZoomIn className="w-3 h-3" />
               </button>
-              <span className="font-mono text-xs text-amber-400 font-bold bg-slate-950 px-2 py-0.5 rounded border border-slate-800 min-w-[54px] text-center">
+              <span className="font-mono text-[11px] text-amber-400 font-bold bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 min-w-[42px] text-center">
                 {(activeClip.zoom ?? 1.0).toFixed(2)}x
               </span>
             </div>
 
             {/* Quick Magnification Presets */}
-            <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="hidden sm:flex items-center gap-1 shrink-0">
               {[
-                { label: '1.0x Full Ice', val: 1.0 },
-                { label: '1.25x Wide', val: 1.25 },
-                { label: '1.5x Action', val: 1.5 },
-                { label: '2.0x Tight', val: 2.0 },
-                { label: '2.5x Close', val: 2.5 },
+                { label: '1.0x', val: 1.0 },
+                { label: '1.25x', val: 1.25 },
+                { label: '1.5x', val: 1.5 },
+                { label: '2.0x', val: 2.0 },
               ].map((p) => (
                 <button
                   key={p.val}
                   type="button"
                   onClick={() => handleClipZoomChange(p.val)}
-                  className={`text-[11px] px-2 py-0.5 rounded font-mono border transition ${
+                  className={`text-[10px] px-1.5 py-0.5 rounded font-mono border transition ${
                     Math.abs((activeClip.zoom ?? 1) - p.val) < 0.04
                       ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
                       : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
@@ -704,28 +705,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           {/* Quick Framing / Pan buttons when zoomed */}
           {(activeClip.zoom ?? 1) > 1.02 && (
-            <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                <Crosshair className="w-3.5 h-3.5 text-sky-400" />
-                <span>Player Focal Point:</span>
-                <span className="font-mono text-[10px] text-sky-400 font-bold">
-                  {activeClip.panX ?? 0 > 0 ? `+${activeClip.panX}` : activeClip.panX ?? 0}% X /{' '}
-                  {activeClip.panY ?? 0 > 0 ? `+${activeClip.panY}` : activeClip.panY ?? 0}% Y
+            <div className="pt-1 border-t border-slate-800/80 flex items-center justify-between gap-1 text-[10px]">
+              <div className="flex items-center gap-1 text-slate-400">
+                <Crosshair className="w-3 h-3 text-sky-400" />
+                <span>Focus:</span>
+                <span className="font-mono text-sky-400 font-bold">
+                  {activeClip.panX ?? 0 > 0 ? `+${activeClip.panX}` : activeClip.panX ?? 0}%X,{' '}
+                  {activeClip.panY ?? 0 > 0 ? `+${activeClip.panY}` : activeClip.panY ?? 0}%Y
                 </span>
               </div>
-              <div className="flex flex-wrap items-center gap-1">
+              <div className="flex items-center gap-1">
                 {[
-                  { label: 'Left Wing', x: -60, y: 0 },
-                  { label: 'Far Boards', x: 0, y: -50 },
-                  { label: 'Center Ice', x: 0, y: 0 },
-                  { label: 'Near Net', x: 0, y: 55 },
-                  { label: 'Right Wing', x: 60, y: 0 },
+                  { label: 'Left', x: -60, y: 0 },
+                  { label: 'Boards', x: 0, y: -50 },
+                  { label: 'Center', x: 0, y: 0 },
+                  { label: 'Net', x: 0, y: 55 },
+                  { label: 'Right', x: 60, y: 0 },
                 ].map((f) => (
                   <button
                     key={f.label}
                     type="button"
                     onClick={() => handleClipPanChange(f.x, f.y)}
-                    className={`text-[10px] px-2 py-0.5 rounded border transition ${
+                    className={`text-[9px] px-1.5 py-0.5 rounded border transition ${
                       (activeClip.panX ?? 0) === f.x && (activeClip.panY ?? 0) === f.y
                         ? 'bg-sky-500/20 border-sky-500 text-sky-300 font-bold'
                         : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'

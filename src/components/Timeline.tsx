@@ -61,21 +61,22 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   return (
-    <div className="w-full bg-slate-900 border-t border-slate-800 p-4 lg:p-6 select-none">
+    <div className="w-full bg-slate-900/95 border-t border-slate-800 px-3 py-1.5 select-none shrink-0">
       {/* Header bar */}
-      <div className="max-w-7xl mx-auto flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2">
-          <h3 className="font-['Chakra_Petch'] font-bold text-white tracking-wide text-sm uppercase">
-            Clips & Transitions Timeline
+          <h3 className="font-['Chakra_Petch'] font-bold text-white tracking-wide text-xs uppercase flex items-center gap-1.5">
+            <SlidersHorizontal className="w-3.5 h-3.5 text-red-500" />
+            Timeline
           </h3>
-          <span className="text-xs text-slate-400 font-medium">
-            (Connect hockey clips with smooth cuts)
+          <span className="text-[11px] text-slate-400 hidden sm:inline">
+            ({clips.length} {clips.length === 1 ? 'clip' : 'clips'} &bull; Click clip to edit)
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
-          <label className="cursor-pointer flex items-center gap-1.5 bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition shadow shadow-red-950/40">
-            <Plus className="w-3.5 h-3.5" />
+        <div className="flex items-center gap-1.5">
+          <label className="cursor-pointer flex items-center gap-1 bg-red-600 hover:bg-red-500 text-white px-2.5 py-1 rounded text-xs font-bold transition shadow shadow-red-950/40">
+            <Plus className="w-3 h-3" />
             <span>Add Videos</span>
             <input
               type="file"
@@ -89,25 +90,25 @@ export const Timeline: React.FC<TimelineProps> = ({
           <button
             id="timeline-add-samples-btn"
             onClick={onAddSampleClips}
-            className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-sky-400 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-700 transition"
+            className="flex items-center gap-1 bg-slate-800 hover:bg-slate-700 text-sky-400 px-2 py-1 rounded text-xs font-semibold border border-slate-700 transition"
           >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>+ Sample Clips</span>
+            <Sparkles className="w-3 h-3" />
+            <span>+ Samples</span>
           </button>
         </div>
       </div>
 
       {/* Horizontal Scrollable Track */}
-      <div className="max-w-7xl mx-auto overflow-x-auto pb-4 pt-2 custom-scrollbar">
+      <div className="overflow-x-auto pb-1 pt-0.5 custom-scrollbar">
         {clips.length === 0 ? (
-          <div className="border-2 border-dashed border-slate-800 rounded-xl p-8 flex flex-col items-center justify-center text-center">
-            <p className="text-sm text-slate-400 mb-2">No videos on the timeline yet.</p>
+          <div className="border border-dashed border-slate-800 rounded-lg py-3 px-4 flex items-center justify-center text-center gap-2">
+            <p className="text-xs text-slate-400">No videos on timeline yet.</p>
             <p className="text-xs text-slate-500">
-              Drag and drop your hockey video files or click <strong className="text-sky-400 font-semibold">Add Videos</strong> above.
+              Drag &amp; drop hockey video files or click <strong className="text-sky-400 font-semibold">Add Videos</strong>.
             </p>
           </div>
         ) : (
-          <div className="flex items-center gap-3 min-w-max">
+          <div className="flex items-center gap-2 min-w-max">
             {clips.map((clip, index) => {
               const trans = transitions[index];
               const isSelected = selectedClipIndex === index;
@@ -121,14 +122,14 @@ export const Timeline: React.FC<TimelineProps> = ({
                   {/* Clip Card */}
                   <div
                     onClick={() => onSelectClipForEdit(clip, index)}
-                    className={`relative group w-52 bg-slate-950 rounded-xl border p-3 cursor-pointer transition-all ${
+                    className={`relative group w-44 bg-slate-950 rounded-lg border p-1.5 cursor-pointer transition-all shrink-0 ${
                       isSelected
-                        ? 'border-red-500 ring-2 ring-red-500/20 shadow-lg shadow-red-950/40'
+                        ? 'border-red-500 ring-1 ring-red-500/30 shadow-md shadow-red-950/40'
                         : 'border-slate-800 hover:border-slate-700 hover:bg-slate-900/60'
                     }`}
                   >
                     {/* Thumbnail banner */}
-                    <div className="relative w-full h-24 bg-slate-900 rounded-lg overflow-hidden mb-2.5 flex items-center justify-center border border-slate-800/80">
+                    <div className="relative w-full h-14 bg-slate-900 rounded overflow-hidden mb-1 flex items-center justify-center border border-slate-800/80">
                       {clip.thumbnailUrl ? (
                         <img
                           src={clip.thumbnailUrl}
@@ -136,13 +137,13 @@ export const Timeline: React.FC<TimelineProps> = ({
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <Tv className="w-8 h-8 text-slate-700" />
+                        <Tv className="w-6 h-6 text-slate-700" />
                       )}
 
                       {/* Tag pill */}
                       {clip.tag && (
                         <span
-                          className={`absolute top-1.5 left-1.5 text-[10px] font-black px-1.5 py-0.5 rounded tracking-wider ${
+                          className={`absolute top-1 left-1 text-[9px] font-black px-1 py-0.2 rounded tracking-wider ${
                             clip.tag === 'GOAL'
                               ? 'bg-red-600 text-white'
                               : clip.tag === 'SAVE'
@@ -157,29 +158,29 @@ export const Timeline: React.FC<TimelineProps> = ({
                       {/* Zoom badge if clip has zoom > 1.05 */}
                       {clip.zoom && clip.zoom > 1.05 && (
                         <span
-                          className="absolute top-1.5 right-1.5 bg-amber-500 text-slate-950 font-black text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 shadow-md shadow-black/50"
+                          className="absolute top-1 right-1 bg-amber-500 text-slate-950 font-black text-[9px] px-1 py-0.2 rounded flex items-center gap-0.5 shadow-xs shadow-black/50"
                           title={`Clip zoomed to ${clip.zoom.toFixed(1)}x magnification`}
                         >
-                          <ZoomIn className="w-2.5 h-2.5 stroke-[2.5]" />
+                          <ZoomIn className="w-2 h-2 stroke-[2.5]" />
                           {clip.zoom.toFixed(1)}x
                         </span>
                       )}
 
                       {/* Duration stamp */}
-                      <span className="absolute bottom-1.5 right-1.5 bg-black/80 backdrop-blur-xs text-[10px] font-mono text-slate-200 px-1.5 py-0.5 rounded">
+                      <span className="absolute bottom-1 right-1 bg-black/80 backdrop-blur-xs text-[9px] font-mono text-slate-200 px-1 py-0.2 rounded">
                         {trimmedDuration.toFixed(1)}s
                       </span>
                     </div>
 
                     {/* Clip Info */}
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center justify-between mb-0.5">
                       <h4
-                        className="text-xs font-semibold text-white truncate max-w-[130px]"
+                        className="text-[11px] font-semibold text-white truncate max-w-[110px]"
                         title={clip.name}
                       >
                         {clip.name}
                       </h4>
-                      <span className="text-[10px] text-slate-400 font-mono">
+                      <span className="text-[9px] text-slate-400 font-mono">
                         {clip.playbackRate !== 1 ? `${clip.playbackRate}x` : ''}
                       </span>
                     </div>
@@ -187,7 +188,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                     {/* Custom Overlay Tag if active */}
                     {clip.useCustomOverlays && (
                       <div
-                        className="flex items-center gap-1 text-[10px] text-sky-300 font-medium mb-1.5 truncate bg-sky-950/60 border border-sky-800/60 px-1.5 py-0.5 rounded"
+                        className="flex items-center gap-1 text-[9px] text-sky-300 font-medium mb-1 truncate bg-sky-950/60 border border-sky-800/60 px-1 py-0.2 rounded"
                         title={`Player: ${clip.playerBannerOverride?.playerName || 'Custom'} (${clip.scorebugOverride?.awayScore ?? 0}-${clip.scorebugOverride?.homeScore ?? 0})`}
                       >
                         <Shield className="w-2.5 h-2.5 text-sky-400 shrink-0" />
@@ -199,8 +200,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                     )}
 
                     {/* Action buttons */}
-                    <div className="flex items-center justify-between pt-1 border-t border-slate-850">
-                      <div className="flex items-center gap-1">
+                    <div className="flex items-center justify-between pt-0.5 border-t border-slate-850 text-xs">
+                      <div className="flex items-center gap-0.5">
                         <button
                           id={`move-clip-left-${index}`}
                           disabled={index === 0}
@@ -209,9 +210,9 @@ export const Timeline: React.FC<TimelineProps> = ({
                             onMoveClip(index, 'left');
                           }}
                           title="Move clip earlier"
-                          className="p-1 text-slate-400 hover:text-white disabled:opacity-30 rounded hover:bg-slate-800 transition"
+                          className="p-0.5 text-slate-400 hover:text-white disabled:opacity-30 rounded hover:bg-slate-800 transition"
                         >
-                          <ChevronLeft className="w-3.5 h-3.5" />
+                          <ChevronLeft className="w-3 h-3" />
                         </button>
 
                         <button
@@ -222,13 +223,13 @@ export const Timeline: React.FC<TimelineProps> = ({
                             onMoveClip(index, 'right');
                           }}
                           title="Move clip later"
-                          className="p-1 text-slate-400 hover:text-white disabled:opacity-30 rounded hover:bg-slate-800 transition"
+                          className="p-0.5 text-slate-400 hover:text-white disabled:opacity-30 rounded hover:bg-slate-800 transition"
                         >
-                          <ChevronRight className="w-3.5 h-3.5" />
+                          <ChevronRight className="w-3 h-3" />
                         </button>
                       </div>
 
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-0.5">
                         <button
                           id={`edit-clip-btn-${index}`}
                           onClick={(e) => {
@@ -236,9 +237,9 @@ export const Timeline: React.FC<TimelineProps> = ({
                             onSelectClipForEdit(clip, index);
                           }}
                           title="Trim & adjust clip"
-                          className="p-1 text-slate-400 hover:text-sky-400 rounded hover:bg-slate-800 transition"
+                          className="p-0.5 text-slate-400 hover:text-sky-400 rounded hover:bg-slate-800 transition"
                         >
-                          <SlidersHorizontal className="w-3.5 h-3.5" />
+                          <SlidersHorizontal className="w-3 h-3" />
                         </button>
 
                         <button
@@ -248,9 +249,9 @@ export const Timeline: React.FC<TimelineProps> = ({
                             onRemoveClip(index);
                           }}
                           title="Delete clip"
-                          className="p-1 text-slate-400 hover:text-red-400 rounded hover:bg-slate-800 transition"
+                          className="p-0.5 text-slate-400 hover:text-red-400 rounded hover:bg-slate-800 transition"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
                     </div>
