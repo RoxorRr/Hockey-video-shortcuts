@@ -32,6 +32,9 @@ interface SerializedClip {
   useCustomOverlays?: boolean;
   scorebugOverride?: VideoClip['scorebugOverride'];
   playerBannerOverride?: VideoClip['playerBannerOverride'];
+  recordedAt?: number;
+  recordedAtDisplay?: string;
+  hasFilenameTimestamp?: boolean;
 }
 
 export interface SavedProjectData {
@@ -101,6 +104,9 @@ export async function saveProjectToStorage(
         useCustomOverlays: c.useCustomOverlays,
         scorebugOverride: c.scorebugOverride,
         playerBannerOverride: c.playerBannerOverride,
+        recordedAt: c.recordedAt,
+        recordedAtDisplay: c.recordedAtDisplay,
+        hasFilenameTimestamp: c.hasFilenameTimestamp,
       };
     });
 
@@ -168,6 +174,9 @@ export async function loadProjectFromStorage(): Promise<{
               zoom: sc.zoom,
               panX: sc.panX,
               panY: sc.panY,
+              recordedAt: sc.recordedAt,
+              recordedAtDisplay: sc.recordedAtDisplay,
+              hasFilenameTimestamp: sc.hasFilenameTimestamp,
             });
           }
         }

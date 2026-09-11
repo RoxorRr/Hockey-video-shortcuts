@@ -19,6 +19,7 @@ import { initAuth, googleSignIn, logout, getAccessToken } from './lib/firebase';
 import { getMyYouTubeChannel } from './lib/youtube';
 import { saveProjectToStorage, loadProjectFromStorage, clearProjectFromStorage } from './lib/storage';
 import { extractVideoMetadata } from './lib/videoMetadata';
+import { getClipTimestamp, sortClipsChronologically } from './lib/timeSort';
 import type { User } from 'firebase/auth';
 import { Plus, Sparkles, UploadCloud } from 'lucide-react';
 
@@ -158,11 +159,14 @@ export default function App() {
     setChannelTitle(undefined);
   };
 
-  // Helper to extract duration and thumbnail reliably from user video files
+  // Helper to extract duration, thumbnail, and timestamp reliably from user video files
   const processVideoFile = async (file: File): Promise<VideoClip> => {
     const url = URL.createObjectURL(file);
     const { duration, thumbnailUrl, width, height } = await extractVideoMetadata(file);
     const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+
+    // Extract chronological timestamp from filename (e.g. "last_tour 2026-09-08 20-42-26.mp4")
+    const timeInfo = getClipTimestamp(file);
 
     // Detect default tag
     let tag: VideoClip['tag'] = 'GOAL';
@@ -188,6 +192,9 @@ export default function App() {
       playbackRate: 1.0,
       thumbnailUrl,
       tag,
+      recordedAt: timeInfo.timestamp,
+      recordedAtDisplay: timeInfo.display,
+      hasFilenameTimestamp: timeInfo.isFromFilename,
     };
   };
 
@@ -205,7 +212,20 @@ export default function App() {
 
     if (newClips.length > 0) {
       setClips((prev) => {
-        const updated = [...prev, ...newClips];
+        const currentlySelectedId =
+          selectedClipIndex !== null && prev[selectedClipIndex] ? prev[selectedClipIndex].id : null;
+
+        const combined = [...prev, ...newClips];
+        // Sort chronologically from oldest to newest if any clip has a recordedAt timestamp
+        const anyHasTimestamp = combined.some((c) => c.recordedAt !== undefined);
+        const updated = anyHasTimestamp ? sortClipsChronologically(combined) : combined;
+
+        // Restore selected clip index to correct position after sorting
+        if (currentlySelectedId) {
+          const newIndex = updated.findIndex((c) => c.id === currentlySelectedId);
+          if (newIndex !== -1) setSelectedClipIndex(newIndex);
+        }
+
         // Ensure transition list matches updated length - 1
         setTransitions((prevTrans) => {
           const trans = [...prevTrans];
@@ -221,11 +241,34 @@ export default function App() {
             const nextType = transitionStyles[trans.length % transitionStyles.length];
             trans.push({ type: nextType, duration: 0.8 });
           }
-          return trans;
+          return trans.slice(0, Math.max(0, updated.length - 1));
         });
         return updated;
       });
     }
+  };
+
+  const handleSortChronological = () => {
+    setClips((prev) => {
+      const currentlySelectedId =
+        selectedClipIndex !== null && prev[selectedClipIndex] ? prev[selectedClipIndex].id : null;
+
+      const sorted = sortClipsChronologically(prev);
+
+      if (currentlySelectedId) {
+        const newIndex = sorted.findIndex((c) => c.id === currentlySelectedId);
+        if (newIndex !== -1) setSelectedClipIndex(newIndex);
+      }
+
+      setTransitions((prevTrans) => {
+        const trans = [...prevTrans];
+        while (trans.length < sorted.length - 1) {
+          trans.push({ type: 'wipe-left', duration: 0.8 });
+        }
+        return trans.slice(0, Math.max(0, sorted.length - 1));
+      });
+      return sorted;
+    });
   };
 
   const handleAddSampleClips = async () => {
@@ -450,6 +493,7 @@ export default function App() {
             onUpdateTransition={handleUpdateTransition}
             onSelectClipForEdit={handleSelectClipForEdit}
             selectedClipIndex={selectedClipIndex}
+            onSortChronological={handleSortChronological}
           />
         </div>
       </main>

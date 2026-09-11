@@ -305,10 +305,22 @@ function createSyntheticHockeyVideo(
  */
 export async function generateSampleHockeyClips(aspectRatio: '9:16' | '16:9' = '9:16'): Promise<VideoClip[]> {
   const [clip1, clip2, clip3] = await Promise.all([
-    createSyntheticHockeyVideo('1. Breakaway Top Shelf Snipe', 'goal', 3.2, aspectRatio),
-    createSyntheticHockeyVideo('2. Desperation Glove Robbery', 'save', 3.0, aspectRatio),
-    createSyntheticHockeyVideo('3. Overtime Slapshot Winner', 'ot', 3.4, aspectRatio),
+    createSyntheticHockeyVideo('Snipe Goal 2026-09-08 19-30-15', 'goal', 3.2, aspectRatio),
+    createSyntheticHockeyVideo('Glove Save 2026-09-08 20-14-40', 'save', 3.0, aspectRatio),
+    createSyntheticHockeyVideo('OT Winner 2026-09-08 20-42-26', 'ot', 3.4, aspectRatio),
   ]);
+
+  clip1.recordedAt = new Date(2026, 8, 8, 19, 30, 15).getTime();
+  clip1.recordedAtDisplay = '2026-09-08 19:30:15';
+  clip1.hasFilenameTimestamp = true;
+
+  clip2.recordedAt = new Date(2026, 8, 8, 20, 14, 40).getTime();
+  clip2.recordedAtDisplay = '2026-09-08 20:14:40';
+  clip2.hasFilenameTimestamp = true;
+
+  clip3.recordedAt = new Date(2026, 8, 8, 20, 42, 26).getTime();
+  clip3.recordedAtDisplay = '2026-09-08 20:42:26';
+  clip3.hasFilenameTimestamp = true;
 
   clip1.useCustomOverlays = true;
   clip1.scorebugOverride = {

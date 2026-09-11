@@ -41,6 +41,10 @@ export interface VideoClip {
   useCustomOverlays?: boolean; // When true, uses clip-specific scorebug & player banner
   scorebugOverride?: Partial<ScorebugConfig> & { enabled?: boolean };
   playerBannerOverride?: Partial<PlayerBannerConfig> & { enabled?: boolean };
+  // Chronological timestamp from filename or metadata:
+  recordedAt?: number; // Detected timestamp in epoch milliseconds
+  recordedAtDisplay?: string; // Formatted display e.g. "2026-09-08 20:42:26"
+  hasFilenameTimestamp?: boolean; // True if parsed from filename
 }
 
 export interface GoalHornConfig {

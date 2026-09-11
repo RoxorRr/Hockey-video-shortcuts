@@ -15,6 +15,7 @@ import {
   Tv,
   ZoomIn,
   Shield,
+  Clock,
 } from 'lucide-react';
 import { playTransitionWhoosh } from '../lib/audio';
 
@@ -29,6 +30,7 @@ interface TimelineProps {
   onUpdateTransition: (index: number, transition: Transition) => void;
   onSelectClipForEdit: (clip: VideoClip, index: number) => void;
   selectedClipIndex: number | null;
+  onSortChronological?: () => void;
 }
 
 const TRANSITION_OPTIONS: { type: TransitionType; label: string; icon: React.ReactNode; desc: string }[] = [
@@ -51,6 +53,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onUpdateTransition,
   onSelectClipForEdit,
   selectedClipIndex,
+  onSortChronological,
 }) => {
   const [activeTransitionModalIndex, setActiveTransitionModalIndex] = useState<number | null>(null);
 
@@ -59,6 +62,8 @@ export const Timeline: React.FC<TimelineProps> = ({
       onAddFiles(e.target.files);
     }
   };
+
+  const hasTimestamps = clips.some((c) => c.recordedAt !== undefined);
 
   return (
     <div className="w-full bg-slate-900/95 border-t border-slate-800 px-3 py-1.5 select-none shrink-0">
@@ -72,9 +77,32 @@ export const Timeline: React.FC<TimelineProps> = ({
           <span className="text-[11px] text-slate-400 hidden sm:inline">
             ({clips.length} {clips.length === 1 ? 'clip' : 'clips'} &bull; Click clip to edit)
           </span>
+
+          {hasTimestamps && (
+            <span
+              className="hidden md:inline-flex items-center gap-1 text-[10px] font-mono text-amber-300 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded"
+              title="Files are sorted chronologically from oldest to newest based on timestamps"
+            >
+              <Clock className="w-2.5 h-2.5 text-amber-400" />
+              Chronological (Oldest &rarr; Newest)
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5">
+          {clips.length > 1 && onSortChronological && (
+            <button
+              id="timeline-sort-chronological-btn"
+              onClick={onSortChronological}
+              title="Sort timeline chronologically (oldest to newest) by filename timestamp"
+              className="flex items-center gap-1 bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-amber-200 px-2 py-1 rounded text-xs font-semibold border border-slate-700 transition shadow-xs"
+            >
+              <Clock className="w-3 h-3 text-amber-400" />
+              <span className="hidden sm:inline">Sort by Time</span>
+              <span className="text-[10px] text-amber-400/80 font-mono hidden md:inline">(Oldest &rarr; Newest)</span>
+            </button>
+          )}
+
           <label className="cursor-pointer flex items-center gap-1 bg-red-600 hover:bg-red-500 text-white px-2.5 py-1 rounded text-xs font-bold transition shadow shadow-red-950/40">
             <Plus className="w-3 h-3" />
             <span>Add Videos</span>
@@ -166,6 +194,11 @@ export const Timeline: React.FC<TimelineProps> = ({
                         </span>
                       )}
 
+                      {/* Sequence index badge */}
+                      <span className="absolute bottom-1 left-1 bg-black/80 backdrop-blur-xs text-[9px] font-mono text-slate-300 px-1 py-0.2 rounded font-bold">
+                        #{index + 1}
+                      </span>
+
                       {/* Duration stamp */}
                       <span className="absolute bottom-1 right-1 bg-black/80 backdrop-blur-xs text-[9px] font-mono text-slate-200 px-1 py-0.2 rounded">
                         {trimmedDuration.toFixed(1)}s
@@ -184,6 +217,17 @@ export const Timeline: React.FC<TimelineProps> = ({
                         {clip.playbackRate !== 1 ? `${clip.playbackRate}x` : ''}
                       </span>
                     </div>
+
+                    {/* Timestamp badge if detected from filename or metadata */}
+                    {clip.recordedAtDisplay && (
+                      <div
+                        className="flex items-center gap-1 text-[9px] font-mono text-amber-300/95 bg-amber-950/60 border border-amber-800/50 px-1 py-0.5 rounded mb-1 truncate"
+                        title={`Time: ${clip.recordedAtDisplay} ${clip.hasFilenameTimestamp ? '(parsed from filename)' : ''}`}
+                      >
+                        <Clock className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                        <span className="truncate">{clip.recordedAtDisplay}</span>
+                      </div>
+                    )}
 
                     {/* Custom Overlay Tag if active */}
                     {clip.useCustomOverlays && (

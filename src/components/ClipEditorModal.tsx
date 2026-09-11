@@ -696,6 +696,12 @@ export const ClipEditorModal: React.FC<ClipEditorModalProps> = ({
             <h3 className="font-bold text-base text-white font-['Chakra_Petch'] tracking-wide">
               TRIM & EDIT HOCKEY CLIP
             </h3>
+            {clip?.recordedAtDisplay && (
+              <span className="hidden sm:flex items-center gap-1 text-[11px] font-mono text-amber-300 bg-amber-950/60 border border-amber-800/60 px-2 py-0.5 rounded ml-2">
+                <Clock className="w-3 h-3 text-amber-400" />
+                {clip.recordedAtDisplay}
+              </span>
+            )}
           </div>
           <button
             onClick={handleModalClose}
