@@ -4,7 +4,7 @@
  * so projects survive browser refresh.
  */
 
-import { AspectRatio, HockeyOverlaySettings, Transition, VideoClip } from '../types';
+import { AspectRatio, FramingMode, HockeyOverlaySettings, Transition, VideoClip } from '../types';
 
 const DB_NAME = 'HockeyHighlightsDB';
 const DB_VERSION = 1;
@@ -18,6 +18,8 @@ interface SerializedClip {
   originalDuration: number;
   startTime: number;
   endTime: number;
+  originalWidth?: number;
+  originalHeight?: number;
   volume: number;
   playbackRate: number;
   thumbnailUrl?: string;
@@ -29,6 +31,7 @@ interface SerializedClip {
   zoom?: number;
   panX?: number;
   panY?: number;
+  framingMode?: FramingMode;
   useCustomOverlays?: boolean;
   scorebugOverride?: VideoClip['scorebugOverride'];
   playerBannerOverride?: VideoClip['playerBannerOverride'];
@@ -39,6 +42,7 @@ interface SerializedClip {
 
 export interface SavedProjectData {
   aspectRatio: AspectRatio;
+  framingMode?: FramingMode;
   transitions: Transition[];
   overlaySettings: HockeyOverlaySettings;
   clips: SerializedClip[];
@@ -101,6 +105,7 @@ export async function saveProjectToStorage(
         zoom: c.zoom,
         panX: c.panX,
         panY: c.panY,
+        framingMode: c.framingMode,
         useCustomOverlays: c.useCustomOverlays,
         scorebugOverride: c.scorebugOverride,
         playerBannerOverride: c.playerBannerOverride,
@@ -242,6 +247,7 @@ export async function loadProjectFromStorage(): Promise<{
               zoom: sc.zoom,
               panX: sc.panX,
               panY: sc.panY,
+              framingMode: sc.framingMode,
               recordedAt: sc.recordedAt,
               recordedAtDisplay: sc.recordedAtDisplay,
               hasFilenameTimestamp: sc.hasFilenameTimestamp,

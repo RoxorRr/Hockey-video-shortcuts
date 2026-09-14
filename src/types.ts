@@ -1,5 +1,7 @@
 export type AspectRatio = '9:16' | '16:9' | '1:1';
 
+export type FramingMode = 'fit-blur' | 'fit-bars' | 'cover';
+
 export type TransitionType =
   | 'crossfade'
   | 'wipe-left'
@@ -37,6 +39,7 @@ export interface VideoClip {
   zoom?: number; // Zoom magnification (1.0 = normal, up to 3.5x)
   panX?: number; // Horizontal focus offset percentage (-100 to 100, 0 = center)
   panY?: number; // Vertical focus offset percentage (-100 to 100, 0 = center)
+  framingMode?: FramingMode; // 'fit-blur' (Fit full 16:9 with blurred background), 'fit-bars' (Fit full 16:9 with dark matte), 'cover' (Fill canvas & crop)
   // Per-clip overlay customization:
   useCustomOverlays?: boolean; // When true, uses clip-specific scorebug & player banner
   scorebugOverride?: Partial<ScorebugConfig> & { enabled?: boolean };

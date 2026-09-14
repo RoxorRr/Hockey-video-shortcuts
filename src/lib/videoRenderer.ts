@@ -2,6 +2,7 @@ import {
   AspectRatio,
   ExportOptions,
   ExportQualityPreset,
+  FramingMode,
   HockeyOverlaySettings,
   PlayerBannerConfig,
   ScorebugConfig,
@@ -83,8 +84,11 @@ export function calculateTimeline(
 }
 
 /**
- * Draw video element with proper cover/fill aspect ratio onto canvas,
- * with support for zoom scale and pan offset (focal point positioning).
+ * Draw video element onto canvas with intelligent framing support:
+ * - 'fit-blur': Fits 100% of the widescreen (16:9) video with dynamic blurred background (zero cropped pixels!)
+ * - 'fit-bars': Fits 100% of the video with clean dark arena matte bars
+ * - 'cover': Crops sides/top to fill the target canvas completely
+ * Supports zoom scale, focal pan offset (X & Y), and vertical placement.
  */
 export function drawVideoFitted(
   ctx: CanvasRenderingContext2D,
@@ -94,58 +98,153 @@ export function drawVideoFitted(
   scale = 1,
   panX = 0, // -100 to 100 percentage
   panY = 0, // -100 to 100 percentage
+  framingMode: FramingMode = 'fit-blur',
 ) {
   const vW = video.videoWidth || canvasWidth;
   const vH = video.videoHeight || canvasHeight;
 
-  // Calculate cover dimensions
   const canvasRatio = canvasWidth / canvasHeight;
   const videoRatio = vW / vH;
-
-  let drawW = canvasWidth;
-  let drawH = canvasHeight;
-  let offsetX = 0;
-  let offsetY = 0;
-
-  if (videoRatio > canvasRatio) {
-    // Video is wider than canvas
-    drawH = canvasHeight;
-    drawW = canvasHeight * videoRatio;
-    offsetX = (canvasWidth - drawW) / 2;
-  } else {
-    // Video is taller than canvas
-    drawW = canvasWidth;
-    drawH = canvasWidth / videoRatio;
-    offsetY = (canvasHeight - drawH) / 2;
-  }
+  const isRatioMismatched = Math.abs(videoRatio - canvasRatio) > 0.04;
 
   const s = Math.max(0.1, Number.isFinite(scale) ? scale : 1);
   const px = Number.isFinite(panX) ? panX : 0;
   const py = Number.isFinite(panY) ? panY : 0;
 
-  if (s !== 1 || px !== 0 || py !== 0) {
+  if (framingMode === 'cover' || !isRatioMismatched) {
+    // 1. COVER / FILL MODE (or native matching ratio)
+    let drawW = canvasWidth;
+    let drawH = canvasHeight;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (videoRatio > canvasRatio) {
+      drawH = canvasHeight;
+      drawW = canvasHeight * videoRatio;
+      offsetX = (canvasWidth - drawW) / 2;
+    } else {
+      drawW = canvasWidth;
+      drawH = canvasWidth / videoRatio;
+      offsetY = (canvasHeight - drawH) / 2;
+    }
+
+    if (s !== 1 || px !== 0 || py !== 0) {
+      ctx.save();
+      ctx.translate(canvasWidth / 2, canvasHeight / 2);
+
+      const scaledW = drawW * s;
+      const scaledH = drawH * s;
+      const maxShiftX = Math.max(0, (scaledW - canvasWidth) / 2);
+      const maxShiftY = Math.max(0, (scaledH - canvasHeight) / 2);
+
+      const effectiveShiftX = maxShiftX > 0 ? (px / 100) * maxShiftX : (px / 100) * (canvasWidth * 0.25);
+      const effectiveShiftY = maxShiftY > 0 ? (py / 100) * maxShiftY : (py / 100) * (canvasHeight * 0.25);
+
+      ctx.translate(-effectiveShiftX, -effectiveShiftY);
+      ctx.scale(s, s);
+      ctx.translate(-canvasWidth / 2, -canvasHeight / 2);
+
+      ctx.drawImage(video, offsetX, offsetY, drawW, drawH);
+      ctx.restore();
+    } else {
+      ctx.drawImage(video, offsetX, offsetY, drawW, drawH);
+    }
+  } else {
+    // 2. FIT / CONTAIN MODES ('fit-blur' or 'fit-bars'): PRESERVES 100% OF THE 16:9 IMAGE!
+    let drawW = canvasWidth;
+    let drawH = canvasHeight;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (videoRatio > canvasRatio) {
+      // Widescreen 16:9 in vertical 9:16: fit full width, letterbox top & bottom
+      drawW = canvasWidth;
+      drawH = canvasWidth / videoRatio;
+      offsetX = 0;
+      offsetY = (canvasHeight - drawH) / 2;
+    } else {
+      // Vertical in widescreen: fit full height, pillarbox left & right
+      drawH = canvasHeight;
+      drawW = canvasHeight * videoRatio;
+      offsetX = (canvasWidth - drawW) / 2;
+      offsetY = 0;
+    }
+
+    // Step A: Draw Background (Blurred Video or Broadcast Matte)
+    if (framingMode === 'fit-blur') {
+      let bgDrawW = canvasWidth;
+      let bgDrawH = canvasHeight;
+      let bgOffsetX = 0;
+      let bgOffsetY = 0;
+
+      if (videoRatio > canvasRatio) {
+        bgDrawH = canvasHeight;
+        bgDrawW = canvasHeight * videoRatio;
+        bgOffsetX = (canvasWidth - bgDrawW) / 2;
+      } else {
+        bgDrawW = canvasWidth;
+        bgDrawH = canvasWidth / videoRatio;
+        bgOffsetY = (canvasHeight - bgDrawH) / 2;
+      }
+
+      ctx.save();
+      if ('filter' in ctx) {
+        ctx.filter = 'blur(28px) brightness(0.55) saturate(1.2)';
+      }
+      ctx.drawImage(video, bgOffsetX, bgOffsetY, bgDrawW, bgDrawH);
+      ctx.restore();
+
+      // Atmospheric broadcast vignette
+      const grad = ctx.createLinearGradient(0, 0, 0, canvasHeight);
+      grad.addColorStop(0, 'rgba(5, 8, 17, 0.4)');
+      grad.addColorStop(0.3, 'rgba(5, 8, 17, 0.05)');
+      grad.addColorStop(0.7, 'rgba(5, 8, 17, 0.05)');
+      grad.addColorStop(1, 'rgba(5, 8, 17, 0.5)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    } else {
+      // 'fit-bars': sleek dark arena matte
+      ctx.fillStyle = '#060913';
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+      const barGrad = ctx.createLinearGradient(0, 0, 0, canvasHeight);
+      barGrad.addColorStop(0, '#0d1527');
+      barGrad.addColorStop(0.2, '#060913');
+      barGrad.addColorStop(0.8, '#060913');
+      barGrad.addColorStop(1, '#0d1527');
+      ctx.fillStyle = barGrad;
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    }
+
+    // Step B: Draw Crisp Foreground Video (100% of 16:9 image preserved)
     ctx.save();
-    // Move origin to canvas center
     ctx.translate(canvasWidth / 2, canvasHeight / 2);
 
-    // Calculate maximum pan bounds so the user can frame any part of the zoomed video
-    const scaledW = drawW * s;
-    const scaledH = drawH * s;
-    const maxShiftX = Math.max(0, (scaledW - canvasWidth) / 2);
-    const maxShiftY = Math.max(0, (scaledH - canvasHeight) / 2);
+    const maxShiftX = Math.max(0, (drawW * s - canvasWidth) / 2);
+    const maxShiftY = Math.max(0, (canvasHeight - drawH * s) / 2);
 
-    // Pan focal point: moving focus right (+px) moves drawn image left (-effectiveShiftX)
-    const effectiveShiftX = maxShiftX > 0 ? (px / 100) * maxShiftX : (px / 100) * (canvasWidth * 0.25);
-    const effectiveShiftY = maxShiftY > 0 ? (py / 100) * maxShiftY : (py / 100) * (canvasHeight * 0.25);
+    const effectiveShiftX = maxShiftX > 0 ? (px / 100) * maxShiftX : 0;
+    // panY allows user to position the 16:9 block vertically (e.g. center, top, bottom)
+    const effectiveShiftY = maxShiftY > 0 ? (py / 100) * maxShiftY : (py / 100) * (canvasHeight * 0.15);
 
     ctx.translate(-effectiveShiftX, -effectiveShiftY);
     ctx.scale(s, s);
     ctx.translate(-canvasWidth / 2, -canvasHeight / 2);
 
+    // Drop shadow for depth against blurred background
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+    ctx.shadowBlur = 24;
+    ctx.shadowOffsetY = 4;
+
     ctx.drawImage(video, offsetX, offsetY, drawW, drawH);
+
+    // Subtle edge border for broadcast polish
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(offsetX, offsetY, drawW, drawH);
+
     ctx.restore();
-  } else {
-    ctx.drawImage(video, offsetX, offsetY, drawW, drawH);
   }
 }
 
@@ -167,27 +266,29 @@ export function renderTransitionEffect(
   const zoomA = clipA?.zoom ?? 1;
   const panXA = clipA?.panX ?? 0;
   const panYA = clipA?.panY ?? 0;
+  const fModeA = clipA?.framingMode ?? 'fit-blur';
 
   const zoomB = clipB?.zoom ?? 1;
   const panXB = clipB?.panX ?? 0;
   const panYB = clipB?.panY ?? 0;
+  const fModeB = clipB?.framingMode ?? 'fit-blur';
 
   switch (type) {
     case 'crossfade': {
-      drawVideoFitted(ctx, videoA, width, height, zoomA, panXA, panYA);
+      drawVideoFitted(ctx, videoA, width, height, zoomA, panXA, panYA, fModeA);
       ctx.save();
       ctx.globalAlpha = p;
-      drawVideoFitted(ctx, videoB, width, height, zoomB, panXB, panYB);
+      drawVideoFitted(ctx, videoB, width, height, zoomB, panXB, panYB, fModeB);
       ctx.restore();
       break;
     }
     case 'wipe-left': {
-      drawVideoFitted(ctx, videoA, width, height, zoomA, panXA, panYA);
+      drawVideoFitted(ctx, videoA, width, height, zoomA, panXA, panYA, fModeA);
       ctx.save();
       ctx.beginPath();
       ctx.rect(0, 0, width * p, height);
       ctx.clip();
-      drawVideoFitted(ctx, videoB, width, height, zoomB, panXB, panYB);
+      drawVideoFitted(ctx, videoB, width, height, zoomB, panXB, panYB, fModeB);
       ctx.restore();
 
       // Wipe Ice Blade Line
@@ -200,12 +301,12 @@ export function renderTransitionEffect(
       break;
     }
     case 'wipe-right': {
-      drawVideoFitted(ctx, videoA, width, height, zoomA, panXA, panYA);
+      drawVideoFitted(ctx, videoA, width, height, zoomA, panXA, panYA, fModeA);
       ctx.save();
       ctx.beginPath();
       ctx.rect(width * (1 - p), 0, width * p, height);
       ctx.clip();
-      drawVideoFitted(ctx, videoB, width, height, zoomB, panXB, panYB);
+      drawVideoFitted(ctx, videoB, width, height, zoomB, panXB, panYB, fModeB);
       ctx.restore();
 
       ctx.strokeStyle = '#38bdf8';
@@ -219,23 +320,23 @@ export function renderTransitionEffect(
     case 'slide-push': {
       ctx.save();
       ctx.translate(-p * width, 0);
-      drawVideoFitted(ctx, videoA, width, height, zoomA, panXA, panYA);
+      drawVideoFitted(ctx, videoA, width, height, zoomA, panXA, panYA, fModeA);
       ctx.restore();
 
       ctx.save();
       ctx.translate((1 - p) * width, 0);
-      drawVideoFitted(ctx, videoB, width, height, zoomB, panXB, panYB);
+      drawVideoFitted(ctx, videoB, width, height, zoomB, panXB, panYB, fModeB);
       ctx.restore();
       break;
     }
     case 'goal-flash': {
       if (p < 0.5) {
-        drawVideoFitted(ctx, videoA, width, height, zoomA, panXA, panYA);
+        drawVideoFitted(ctx, videoA, width, height, zoomA, panXA, panYA, fModeA);
         const flashAlpha = p * 2;
         ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
         ctx.fillRect(0, 0, width, height);
       } else {
-        drawVideoFitted(ctx, videoB, width, height, zoomB, panXB, panYB);
+        drawVideoFitted(ctx, videoB, width, height, zoomB, panXB, panYB, fModeB);
         const flashAlpha = (1 - p) * 2;
         ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
         ctx.fillRect(0, 0, width, height);
@@ -244,26 +345,28 @@ export function renderTransitionEffect(
     }
     case 'zoom': {
       const transZoomA = zoomA * (1 + p * 0.4);
-      drawVideoFitted(ctx, videoA, width, height, transZoomA, panXA, panYA);
+      drawVideoFitted(ctx, videoA, width, height, transZoomA, panXA, panYA, fModeA);
       ctx.save();
       ctx.globalAlpha = p;
       const transZoomB = zoomB * (1.3 - p * 0.3);
-      drawVideoFitted(ctx, videoB, width, height, transZoomB, panXB, panYB);
+      drawVideoFitted(ctx, videoB, width, height, transZoomB, panXB, panYB, fModeB);
       ctx.restore();
       break;
     }
     case 'glitch': {
+      const targetVid = p < 0.5 ? videoA : videoB;
+      const targetZoom = p < 0.5 ? zoomA : zoomB;
+      const targetPanX = p < 0.5 ? panXA : panXB;
+      const targetPanY = p < 0.5 ? panYA : panYB;
+      const targetFMode = p < 0.5 ? fModeA : fModeB;
+
       if (Math.random() > 0.4) {
         ctx.save();
         const sliceY = Math.random() * height;
         const sliceH = Math.random() * 80 + 20;
         const offset = (Math.random() - 0.5) * 40;
-        const targetVid = p < 0.5 ? videoA : videoB;
-        const targetZoom = p < 0.5 ? zoomA : zoomB;
-        const targetPanX = p < 0.5 ? panXA : panXB;
-        const targetPanY = p < 0.5 ? panYA : panYB;
 
-        drawVideoFitted(ctx, targetVid, width, height, targetZoom, targetPanX, targetPanY);
+        drawVideoFitted(ctx, targetVid, width, height, targetZoom, targetPanX, targetPanY, targetFMode);
         ctx.drawImage(
           targetVid,
           0,
@@ -279,11 +382,7 @@ export function renderTransitionEffect(
         ctx.fillRect(0, sliceY, width, sliceH);
         ctx.restore();
       } else {
-        const targetVid = p < 0.5 ? videoA : videoB;
-        const targetZoom = p < 0.5 ? zoomA : zoomB;
-        const targetPanX = p < 0.5 ? panXA : panXB;
-        const targetPanY = p < 0.5 ? panYA : panYB;
-        drawVideoFitted(ctx, targetVid, width, height, targetZoom, targetPanX, targetPanY);
+        drawVideoFitted(ctx, targetVid, width, height, targetZoom, targetPanX, targetPanY, targetFMode);
       }
       break;
     }
@@ -292,7 +391,8 @@ export function renderTransitionEffect(
       const targetZoom = p < 0.5 ? zoomA : zoomB;
       const targetPanX = p < 0.5 ? panXA : panXB;
       const targetPanY = p < 0.5 ? panYA : panYB;
-      drawVideoFitted(ctx, targetVid, width, height, targetZoom, targetPanX, targetPanY);
+      const targetFMode = p < 0.5 ? fModeA : fModeB;
+      drawVideoFitted(ctx, targetVid, width, height, targetZoom, targetPanX, targetPanY, targetFMode);
     }
   }
 }
@@ -1287,6 +1387,7 @@ export async function exportCombinedVideo(
           clip.zoom ?? 1,
           clip.panX ?? 0,
           clip.panY ?? 0,
+          clip.framingMode ?? 'fit-blur',
         );
       }
 

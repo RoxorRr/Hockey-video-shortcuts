@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AspectRatio, ExportOptions, HockeyOverlaySettings, Transition, VideoClip } from './types';
+import { AspectRatio, ExportOptions, FramingMode, HockeyOverlaySettings, Transition, VideoClip } from './types';
 import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
 import { Timeline } from './components/Timeline';
@@ -315,6 +315,10 @@ export default function App() {
     });
   };
 
+  const handleApplyFramingModeToAll = (mode: FramingMode) => {
+    setClips((prev) => prev.map((c) => ({ ...c, framingMode: mode })));
+  };
+
   const handleRemoveClip = (index: number) => {
     setClips((prev) => {
       const next = prev.filter((_, i) => i !== index);
@@ -498,6 +502,7 @@ export default function App() {
               overlaySettings={overlaySettings}
               aspectRatio={aspectRatio}
               onAspectRatioChange={setAspectRatio}
+              onApplyFramingModeToAll={handleApplyFramingModeToAll}
               onAddSampleClips={handleAddSampleClips}
               onOpenUploadDialog={() => {
                 const input = document.createElement('input');

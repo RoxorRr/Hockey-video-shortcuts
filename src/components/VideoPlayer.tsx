@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   AspectRatio,
+  FramingMode,
   HockeyOverlaySettings,
   HockeyTag,
   ScorebugConfig,
@@ -45,6 +46,7 @@ interface VideoPlayerProps {
   overlaySettings: HockeyOverlaySettings;
   aspectRatio: AspectRatio;
   onAspectRatioChange?: (ratio: AspectRatio) => void;
+  onApplyFramingModeToAll?: (mode: FramingMode) => void;
   onAddSampleClips: () => void;
   onOpenUploadDialog: () => void;
   // Optional backwards-compat props from earlier full-timeline implementation
@@ -63,6 +65,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   overlaySettings,
   aspectRatio,
   onAspectRatioChange,
+  onApplyFramingModeToAll,
   onAddSampleClips,
   onOpenUploadDialog,
 }) => {
@@ -80,13 +83,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const clip = activeIndex !== null ? clips[activeIndex] : null;
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const bgVideoRef = useRef<HTMLVideoElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentPlayTime, setCurrentPlayTime] = useState(0);
   const [isAuditioningHorn, setIsAuditioningHorn] = useState(false);
   const [showOverlaysPreview, setShowOverlaysPreview] = useState(true);
   const [isHornFiring, setIsHornFiring] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
-  const [fitMode, setFitMode] = useState<'cover' | 'contain'>('cover');
+
+  // Framing mode: for 9:16 Shorts, default to 'fit-blur' so 100% of 16:9 widescreen hockey is preserved!
+  const effectiveFramingMode: FramingMode =
+    clip?.framingMode ?? (aspectRatio === '9:16' ? 'fit-blur' : 'fit-blur');
+
+  const handleApplyFramingToAll = (mode: FramingMode) => {
+    if (onApplyFramingModeToAll) {
+      onApplyFramingModeToAll(mode);
+    } else if (onUpdateClip) {
+      clips.forEach((c, idx) => {
+        onUpdateClip(idx, { ...c, framingMode: mode });
+      });
+    }
+  };
 
   // Audio & Horn refs
   const activeHornStopRef = useRef<(() => void) | null>(null);
@@ -340,9 +357,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const progressInTrim = Math.max(0, (curTime - startTime) / playbackRate);
       setCurrentPlayTime(progressInTrim);
 
+      // Sync blurred background video if active
+      if (bgVideoRef.current) {
+        if (Math.abs(bgVideoRef.current.currentTime - curTime) > 0.15) {
+          bgVideoRef.current.currentTime = curTime;
+        }
+        if (bgVideoRef.current.paused && !video.paused) {
+          bgVideoRef.current.play().catch(() => {});
+        }
+      }
+
       // Loop or pause at trim end
       if (curTime >= endTime - 0.04) {
         video.currentTime = startTime;
+        if (bgVideoRef.current) bgVideoRef.current.currentTime = startTime;
         setCurrentPlayTime(0);
         hornTriggeredRef.current = false;
         return;
@@ -471,18 +499,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
     if (isPlaying) {
       video.pause();
+      bgVideoRef.current?.pause();
       setIsPlaying(false);
       stopActiveHorn();
     } else {
       stopAudition();
       if (video.currentTime < startTime || video.currentTime >= endTime - 0.05) {
         video.currentTime = startTime;
+        if (bgVideoRef.current) bgVideoRef.current.currentTime = startTime;
         hornTriggeredRef.current = false;
         setCurrentPlayTime(0);
       } else if (video.currentTime < targetVideoTimestamp) {
         hornTriggeredRef.current = false;
       }
-      video.play().catch(() => {});
+      video
+        .play()
+        .then(() => {
+          if (bgVideoRef.current) {
+            bgVideoRef.current.currentTime = video.currentTime;
+            bgVideoRef.current.playbackRate = video.playbackRate;
+            bgVideoRef.current.play().catch(() => {});
+          }
+        })
+        .catch(() => {});
       setIsPlaying(true);
     }
   };
@@ -491,7 +530,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const video = videoRef.current;
     if (!video) return;
     const mediaTime = startTime + targetOffsetSeconds * playbackRate;
-    video.currentTime = Math.max(startTime, Math.min(endTime, mediaTime));
+    const clampedTime = Math.max(startTime, Math.min(endTime, mediaTime));
+    video.currentTime = clampedTime;
+    if (bgVideoRef.current) {
+      bgVideoRef.current.currentTime = clampedTime;
+    }
     setCurrentPlayTime(targetOffsetSeconds);
     if (mediaTime < targetVideoTimestamp) {
       hornTriggeredRef.current = false;
@@ -905,16 +948,60 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <span className="hidden sm:inline">Overlays</span>
           </button>
 
-          {/* Fit / Fill Mode Toggle */}
-          <button
-            type="button"
-            onClick={() => setFitMode((m) => (m === 'cover' ? 'contain' : 'cover'))}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border border-slate-800 bg-slate-950 text-slate-300 hover:text-white transition cursor-pointer"
-            title={fitMode === 'cover' ? 'Fill Canvas (Cover - matches export)' : 'Fit Letterbox (Contain)'}
-          >
-            <Maximize2 className="w-3 h-3 text-red-400" />
-            <span className="hidden sm:inline">{fitMode === 'cover' ? 'Fill' : 'Fit'}</span>
-          </button>
+          {/* Framing Mode Selector (16:9 into 9:16 Shorts fit-blur / fit-bars / cover) */}
+          <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5 shadow-xs">
+            <span className="text-[9px] font-bold uppercase font-['Chakra_Petch'] text-slate-400 px-1.5 hidden xl:inline">
+              Framing:
+            </span>
+            <button
+              type="button"
+              onClick={() => updateClipField({ framingMode: 'fit-blur' })}
+              className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer flex items-center gap-1 ${
+                effectiveFramingMode === 'fit-blur'
+                  ? 'bg-sky-600 text-white shadow-xs'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Fit 100% of 16:9 video in 9:16 Shorts with dynamic blurred background (zero cropped pixels!)"
+            >
+              <Sparkles className="w-2.5 h-2.5 text-sky-300" />
+              <span>Fit + Blur</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => updateClipField({ framingMode: 'fit-bars' })}
+              className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
+                effectiveFramingMode === 'fit-bars'
+                  ? 'bg-slate-700 text-white shadow-xs'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Fit 100% of 16:9 video with clean dark arena matte bars"
+            >
+              <span>Fit + Matte</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => updateClipField({ framingMode: 'cover' })}
+              className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
+                effectiveFramingMode === 'cover'
+                  ? 'bg-slate-700 text-white shadow-xs'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Fill entire frame (crops sides of 16:9)"
+            >
+              <span>Fill (Crop)</span>
+            </button>
+          </div>
+
+          {clips.length > 1 && (
+            <button
+              type="button"
+              onClick={() => handleApplyFramingToAll(effectiveFramingMode)}
+              className="text-[9px] font-medium text-slate-400 hover:text-sky-300 hover:bg-slate-800/80 px-1.5 py-1 rounded transition border border-slate-800 hidden sm:inline cursor-pointer"
+              title={`Apply current framing mode (${effectiveFramingMode}) to all clips in project`}
+            >
+              All Clips
+            </button>
+          )}
 
           {/* Interactive Aspect Ratio Switcher */}
           <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5 shadow-xs">
@@ -939,7 +1026,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => onRemoveClip(activeIndex)}
-              className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-850 transition"
+              className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-850 transition cursor-pointer"
               title="Delete this clip"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -960,9 +1047,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onPointerUp={handlePointerUp}
           onClick={handlePreviewContainerClick}
         >
+          {/* Dynamic Blurred Video Background for 16:9 in 9:16 Framing */}
+          {effectiveFramingMode === 'fit-blur' && (
+            <div className="absolute inset-0 overflow-hidden pointer-events-none select-none">
+              <video
+                ref={bgVideoRef}
+                src={clip.url}
+                playsInline
+                muted
+                aria-hidden="true"
+                className="w-full h-full object-cover blur-2xl scale-125 opacity-65 brightness-[0.55] transition-opacity duration-300"
+              />
+              {/* Vignette Depth Gradient */}
+              <div className="absolute inset-0 bg-gradient-to-b from-slate-950/60 via-slate-950/10 to-slate-950/70 pointer-events-none" />
+            </div>
+          )}
+
+          {/* Clean Dark Arena Matte for fit-bars mode */}
+          {effectiveFramingMode === 'fit-bars' && (
+            <div className="absolute inset-0 bg-[#060913] pointer-events-none select-none">
+              <div className="absolute inset-0 bg-gradient-to-b from-slate-950 via-[#060913] to-slate-950 pointer-events-none" />
+            </div>
+          )}
+
           {/* Hardware-accelerated Video Element with CSS Zoom/Pan transform */}
           <div
-            className="w-full h-full flex items-center justify-center transition-transform duration-75 ease-out will-change-transform"
+            className="w-full h-full flex items-center justify-center transition-transform duration-75 ease-out will-change-transform relative z-10"
             style={{
               transform: `scale(${zoom}) translate(${-panX * 0.35}%, ${-panY * 0.35}%)`,
               transformOrigin: 'center center',
@@ -973,8 +1083,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               src={clip.url}
               playsInline
               onLoadedMetadata={handleVideoLoadedMetadata}
-              className={`w-full h-full pointer-events-none ${
-                fitMode === 'cover' ? 'object-cover' : 'object-contain'
+              className={`pointer-events-none ${
+                effectiveFramingMode === 'cover'
+                  ? 'w-full h-full object-cover'
+                  : 'w-full h-auto max-h-full object-contain shadow-2xl drop-shadow-[0_16px_36px_rgba(0,0,0,0.85)] border-y border-white/10'
               }`}
             />
           </div>
@@ -1511,59 +1623,105 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
 
         {/* 5. QUICK ZOOM & FRAMING PRESETS BAR */}
-        <div className="flex items-center justify-between gap-2 flex-wrap text-xs bg-slate-950/60 p-2 rounded-lg border border-slate-850">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[10px] font-bold text-slate-400 uppercase font-['Chakra_Petch'] flex items-center gap-1">
-              <ZoomIn className="w-3 h-3 text-amber-400" />
-              Zoom:
-            </span>
-            {[
-              { label: '1.0x Full Ice', val: 1.0 },
-              { label: '1.25x Wide', val: 1.25 },
-              { label: '1.5x Action', val: 1.5 },
-              { label: '1.8x Close', val: 1.8 },
-              { label: '2.0x Tight', val: 2.0 },
-            ].map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                onClick={() => updateClipField({ zoom: preset.val })}
-                className={`px-2 py-0.5 rounded text-[10px] font-semibold transition cursor-pointer ${
-                  Math.abs(zoom - preset.val) < 0.05
-                    ? 'bg-amber-500 text-slate-950 font-bold shadow'
-                    : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
-                }`}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-
-          {zoom > 1.02 && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-slate-500">Pan Focus:</span>
+        <div className="flex flex-col gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-850">
+          <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] font-bold text-slate-400 uppercase font-['Chakra_Petch'] flex items-center gap-1">
+                <ZoomIn className="w-3 h-3 text-amber-400" />
+                Zoom:
+              </span>
               {[
-                { label: 'Left', x: -50, y: 0 },
-                { label: 'Center', x: 0, y: 0 },
-                { label: 'Right', x: 50, y: 0 },
-                { label: 'Net', x: 0, y: 40 },
-              ].map((pan) => (
+                { label: '1.0x Full Ice', val: 1.0 },
+                { label: '1.25x Wide', val: 1.25 },
+                { label: '1.5x Action', val: 1.5 },
+                { label: '1.8x Close', val: 1.8 },
+                { label: '2.0x Tight', val: 2.0 },
+              ].map((preset) => (
                 <button
-                  key={pan.label}
+                  key={preset.label}
                   type="button"
-                  onClick={() => updateClipField({ panX: pan.x, panY: pan.y })}
-                  className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] text-slate-300 font-medium cursor-pointer"
+                  onClick={() => updateClipField({ zoom: preset.val })}
+                  className={`px-2 py-0.5 rounded text-[10px] font-semibold transition cursor-pointer ${
+                    Math.abs(zoom - preset.val) < 0.05
+                      ? 'bg-amber-500 text-slate-950 font-bold shadow'
+                      : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                  }`}
                 >
-                  {pan.label}
+                  {preset.label}
                 </button>
               ))}
-              <button
-                type="button"
-                onClick={() => updateClipField({ zoom: 1.0, panX: 0, panY: 0 })}
-                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-[10px] transition cursor-pointer"
-              >
-                Reset
-              </button>
+            </div>
+
+            {/* Vertical Positioning when in Fit Mode (16:9 in 9:16 Shorts) */}
+            {effectiveFramingMode !== 'cover' && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-slate-400 font-bold uppercase font-['Chakra_Petch'] flex items-center gap-1">
+                  <Move className="w-2.5 h-2.5 text-sky-400" />
+                  Position:
+                </span>
+                {[
+                  { label: 'Top', y: -45 },
+                  { label: 'Center', y: 0 },
+                  { label: 'Bottom', y: 45 },
+                ].map((pos) => (
+                  <button
+                    key={pos.label}
+                    type="button"
+                    onClick={() => updateClipField({ panY: pos.y })}
+                    className={`px-2 py-0.5 rounded text-[10px] font-semibold transition cursor-pointer ${
+                      Math.abs(panY - pos.y) < 15
+                        ? 'bg-sky-600 text-white font-bold shadow-xs'
+                        : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                    }`}
+                    title={`Place 16:9 video frame at the ${pos.label.toLowerCase()}`}
+                  >
+                    {pos.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {zoom > 1.02 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-slate-500">Pan Focus:</span>
+                {[
+                  { label: 'Left', x: -50, y: 0 },
+                  { label: 'Center', x: 0, y: 0 },
+                  { label: 'Right', x: 50, y: 0 },
+                  { label: 'Net', x: 0, y: 40 },
+                ].map((pan) => (
+                  <button
+                    key={pan.label}
+                    type="button"
+                    onClick={() => updateClipField({ panX: pan.x, panY: pan.y })}
+                    className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] text-slate-300 font-medium cursor-pointer"
+                  >
+                    {pan.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => updateClipField({ zoom: 1.0, panX: 0, panY: 0 })}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-[10px] transition cursor-pointer"
+                >
+                  Reset
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Reassurance banner when in 9:16 Shorts with Fit Mode */}
+          {aspectRatio === '9:16' && effectiveFramingMode !== 'cover' && (
+            <div className="flex items-center justify-between text-[10px] bg-sky-950/40 border border-sky-500/25 rounded px-2 py-1 text-sky-200">
+              <span className="flex items-center gap-1.5">
+                <Sparkles className="w-3 h-3 text-sky-400 shrink-0" />
+                <span>
+                  <strong>16:9 Widescreen to 9:16 Shorts Fit:</strong> 100% of your hockey video is preserved with zero side cropping.
+                </span>
+              </span>
+              <span className="text-[9px] text-sky-300/70 font-mono hidden sm:inline">
+                {effectiveFramingMode === 'fit-blur' ? 'Blurred Arena Background' : 'Arena Matte Bars'}
+              </span>
             </div>
           )}
         </div>
