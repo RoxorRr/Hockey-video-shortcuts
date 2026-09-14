@@ -644,7 +644,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
               ? 'bg-red-600 text-white shadow-sm shadow-red-950/40'
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
-          title="AI Sports Music Generator (Upbeat & Vocal-Free)"
+          title="Real Sports Music & Soundtracks (80s, 90s, 00s, Custom Uploads)"
         >
           <Music className="w-3.5 h-3.5 text-emerald-400" />
           <span>Music</span>

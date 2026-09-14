@@ -126,8 +126,10 @@ export default function App() {
     let mounted = true;
     loadProjectFromStorage().then((savedData) => {
       if (mounted) {
-        if (savedData && savedData.clips && savedData.clips.length > 0) {
-          setClips(savedData.clips);
+        if (savedData) {
+          if (savedData.clips && savedData.clips.length > 0) {
+            setClips(savedData.clips);
+          }
           if (savedData.transitions) setTransitions(savedData.transitions);
           if (savedData.overlaySettings) setOverlaySettings(savedData.overlaySettings);
           if (savedData.aspectRatio) setAspectRatio(savedData.aspectRatio);
@@ -324,18 +326,26 @@ export default function App() {
         }
         return trans;
       });
-      return next;
-    });
 
-    setSelectedClipIndex((prev) => {
-      if (prev === null) return null;
-      if (prev === index) {
-        return clips.length > 1 ? Math.max(0, index - 1) : null;
+      // Update selected clip index safely based on the NEW clips length
+      setSelectedClipIndex((currentSelected) => {
+        if (currentSelected === null) return null;
+        if (next.length === 0) return null;
+        if (currentSelected === index) {
+          return Math.min(index, next.length - 1);
+        }
+        if (currentSelected > index) {
+          return currentSelected - 1;
+        }
+        return currentSelected;
+      });
+
+      if (next.length === 0) {
+        setExportedBlob(null);
+        setCurrentTime(0);
       }
-      if (prev > index) {
-        return prev - 1;
-      }
-      return prev;
+
+      return next;
     });
   };
 
@@ -487,6 +497,7 @@ export default function App() {
               onMoveClip={handleMoveClip}
               overlaySettings={overlaySettings}
               aspectRatio={aspectRatio}
+              onAspectRatioChange={setAspectRatio}
               onAddSampleClips={handleAddSampleClips}
               onOpenUploadDialog={() => {
                 const input = document.createElement('input');

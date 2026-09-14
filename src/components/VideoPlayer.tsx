@@ -44,6 +44,7 @@ interface VideoPlayerProps {
   onMoveClip?: (index: number, direction: 'left' | 'right') => void;
   overlaySettings: HockeyOverlaySettings;
   aspectRatio: AspectRatio;
+  onAspectRatioChange?: (ratio: AspectRatio) => void;
   onAddSampleClips: () => void;
   onOpenUploadDialog: () => void;
   // Optional backwards-compat props from earlier full-timeline implementation
@@ -61,6 +62,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onMoveClip,
   overlaySettings,
   aspectRatio,
+  onAspectRatioChange,
   onAddSampleClips,
   onOpenUploadDialog,
 }) => {
@@ -84,6 +86,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [showOverlaysPreview, setShowOverlaysPreview] = useState(true);
   const [isHornFiring, setIsHornFiring] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
+  const [fitMode, setFitMode] = useState<'cover' | 'contain'>('cover');
 
   // Audio & Horn refs
   const activeHornStopRef = useRef<(() => void) | null>(null);
@@ -294,6 +297,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const audio = bgMusicAudioRef.current;
     if (audio.src !== url) {
       audio.src = url;
+      audio.currentTime = track.startTimeOffset || 0;
     }
     audio.loop = bgMusic?.loop !== false;
     const baseVol = bgMusic?.volume ?? 0.75;
@@ -699,51 +703,127 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     togglePlay();
   };
 
-  // If no clips exist, show dropzone empty state
+  // Aspect ratio styling for both empty state and player container
+  const getAspectStyle = (ratio: AspectRatio): React.CSSProperties => {
+    return {
+      aspectRatio: ratio === '9:16' ? '9 / 16' : ratio === '1:1' ? '1 / 1' : '16 / 9',
+      height: '100%',
+      width: 'auto',
+      maxWidth: '100%',
+      maxHeight: '100%',
+    };
+  };
+
+  // If no clips exist, show framed studio with live aspect ratio canvas
   if (!clip || activeIndex === null || clips.length === 0) {
     return (
-      <div className="relative w-full h-full flex flex-col items-center justify-center bg-slate-950/80 rounded-2xl border border-slate-800 p-6 text-center select-none overflow-hidden">
-        <div className="w-16 h-16 rounded-2xl bg-red-600/10 border border-red-500/20 flex items-center justify-center mb-4 shadow-inner">
-          <Tv className="w-8 h-8 text-red-500" />
+      <div className="relative w-full h-full flex flex-col bg-slate-950/90 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
+        {/* 1. STUDIO HEADER (Empty state with live format switcher) */}
+        <div className="shrink-0 flex items-center justify-between px-3.5 py-2 border-b border-slate-800 bg-slate-900/80 gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="bg-slate-800 border border-slate-700 text-slate-400 font-mono text-[10px] px-2 py-0.5 rounded font-bold uppercase">
+              0 Clips
+            </span>
+            <span className="text-xs font-bold font-['Chakra_Petch'] text-slate-300 uppercase tracking-wider">
+              Canvas Studio
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Format selector buttons */}
+            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5 shadow-xs">
+              {(['9:16', '16:9', '1:1'] as AspectRatio[]).map((ratio) => (
+                <button
+                  key={ratio}
+                  type="button"
+                  onClick={() => onAspectRatioChange?.(ratio)}
+                  className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono transition cursor-pointer ${
+                    aspectRatio === ratio
+                      ? 'bg-red-600 text-white shadow-xs'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title={`Switch to ${ratio} format (${ratio === '9:16' ? 'Vertical Shorts' : ratio === '16:9' ? 'YouTube Widescreen' : 'Square Feed'})`}
+                >
+                  {ratio} {ratio === '9:16' ? 'Shorts' : ratio === '16:9' ? 'Wide' : 'Square'}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
-        <h3 className="font-['Chakra_Petch'] text-lg font-bold text-white uppercase tracking-wider mb-1">
-          No Hockey Clips Loaded
-        </h3>
-        <p className="text-xs text-slate-400 max-w-sm mb-5 leading-relaxed">
-          Import your game highlights or load pre-cut NHL sample clips to edit scores, players,
-          zoom framing, and arena goal horns with zero lag.
-        </p>
-        <div className="flex items-center gap-3 flex-wrap justify-center">
-          <button
-            id="empty-state-upload-btn"
-            type="button"
-            onClick={onOpenUploadDialog}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-lg shadow-red-950/40 transition cursor-pointer uppercase tracking-wider font-['Chakra_Petch']"
+
+        {/* 2. STAGE: Aspect Ratio Framed Canvas */}
+        <div className="flex-1 min-h-0 relative flex items-center justify-center bg-black p-3 overflow-hidden select-none">
+          <div
+            style={getAspectStyle(aspectRatio)}
+            className="relative rounded-2xl overflow-hidden bg-slate-950 border-2 border-dashed border-slate-800 flex flex-col items-center justify-center p-6 text-center shadow-2xl transition-all duration-300 group"
           >
-            <Plus className="w-4 h-4" />
-            <span>Add Video Recordings</span>
-          </button>
-          <button
-            id="empty-state-sample-btn"
-            type="button"
-            onClick={onAddSampleClips}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white font-bold text-xs border border-slate-700 transition cursor-pointer font-['Chakra_Petch']"
-          >
-            <Sparkles className="w-4 h-4 text-amber-400" />
-            <span>Load Sample Game Clips</span>
-          </button>
+            {/* Aspect watermark badge */}
+            <div className="absolute top-3 left-3 bg-slate-900/90 border border-slate-800 backdrop-blur-xs px-2 py-1 rounded-md text-[10px] font-mono text-slate-400 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+              <span>
+                {aspectRatio === '9:16'
+                  ? '9:16 Vertical Shorts (1080×1920)'
+                  : aspectRatio === '16:9'
+                  ? '16:9 Widescreen (1920×1080)'
+                  : '1:1 Square (1080×1080)'}
+              </span>
+            </div>
+
+            {/* Ice rink guideline lines */}
+            <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-red-500/10 pointer-events-none" />
+            <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 border-l border-blue-500/10 pointer-events-none" />
+
+            <div className="relative z-10 flex flex-col items-center max-w-xs">
+              <div className="w-14 h-14 rounded-2xl bg-red-600/10 border border-red-500/20 flex items-center justify-center mb-3 shadow-inner">
+                <Tv className="w-7 h-7 text-red-500" />
+              </div>
+              <h3 className="font-['Chakra_Petch'] text-base font-bold text-white uppercase tracking-wider mb-1">
+                {aspectRatio === '9:16'
+                  ? '9:16 Shorts Canvas'
+                  : aspectRatio === '16:9'
+                  ? '16:9 Widescreen Canvas'
+                  : '1:1 Square Canvas'}
+              </h3>
+              <p className="text-[11px] text-slate-400 mb-4 leading-relaxed">
+                Add video clips or load instant NHL samples. They will be framed for this canvas.
+              </p>
+              <div className="flex flex-col sm:flex-row items-center gap-2 w-full justify-center">
+                <button
+                  id="empty-state-upload-btn"
+                  type="button"
+                  onClick={onOpenUploadDialog}
+                  className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-lg shadow-red-950/40 transition cursor-pointer uppercase tracking-wider font-['Chakra_Petch']"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Videos</span>
+                </button>
+                <button
+                  id="empty-state-sample-btn"
+                  type="button"
+                  onClick={onAddSampleClips}
+                  className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white font-bold text-xs border border-slate-700 transition cursor-pointer font-['Chakra_Petch']"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Sample Clips</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. STUDIO FOOTER (Empty state) */}
+        <div className="shrink-0 px-3.5 py-1.5 border-t border-slate-800/80 bg-slate-900/60 flex items-center justify-between text-[11px] text-slate-400">
+          <span className="flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            Canvas ready &bull; Frame format: <strong className="text-white font-mono">{aspectRatio}</strong>
+          </span>
+          <span className="text-slate-500 text-[10px]">
+            Switch format anytime using the buttons above
+          </span>
         </div>
       </div>
     );
   }
-
-  // Calculate container aspect ratio styling
-  const aspectClass =
-    aspectRatio === '9:16'
-      ? 'aspect-[9/16] max-h-[50vh]'
-      : aspectRatio === '1:1'
-      ? 'aspect-square max-h-[50vh]'
-      : 'aspect-video max-h-[50vh]';
 
   return (
     <div className="relative w-full h-full flex flex-col bg-slate-950/90 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
@@ -825,9 +905,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <span className="hidden sm:inline">Overlays</span>
           </button>
 
-          <span className="bg-slate-950 border border-slate-800 text-slate-400 font-mono text-[10px] px-2 py-1 rounded-lg font-bold">
-            {aspectRatio}
-          </span>
+          {/* Fit / Fill Mode Toggle */}
+          <button
+            type="button"
+            onClick={() => setFitMode((m) => (m === 'cover' ? 'contain' : 'cover'))}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border border-slate-800 bg-slate-950 text-slate-300 hover:text-white transition cursor-pointer"
+            title={fitMode === 'cover' ? 'Fill Canvas (Cover - matches export)' : 'Fit Letterbox (Contain)'}
+          >
+            <Maximize2 className="w-3 h-3 text-red-400" />
+            <span className="hidden sm:inline">{fitMode === 'cover' ? 'Fill' : 'Fit'}</span>
+          </button>
+
+          {/* Interactive Aspect Ratio Switcher */}
+          <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5 shadow-xs">
+            {(['9:16', '16:9', '1:1'] as AspectRatio[]).map((ratio) => (
+              <button
+                key={ratio}
+                type="button"
+                onClick={() => onAspectRatioChange?.(ratio)}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono transition cursor-pointer ${
+                  aspectRatio === ratio
+                    ? 'bg-red-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+                title={`Switch to ${ratio} format (${ratio === '9:16' ? 'Vertical Shorts' : ratio === '16:9' ? 'YouTube Widescreen' : 'Square Feed'})`}
+              >
+                {ratio}
+              </button>
+            ))}
+          </div>
 
           {onRemoveClip && (
             <button
@@ -845,7 +951,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* 2. VIDEO STAGE: Native Hardware Accelerated Video Player & Live WYSIWYG Overlays */}
       <div className="flex-1 min-h-0 relative flex items-center justify-center bg-black p-2 overflow-hidden select-none">
         <div
-          className={`relative rounded-xl overflow-hidden bg-slate-950 ${aspectClass} w-full flex items-center justify-center border border-slate-850 shadow-2xl select-none ${
+          style={getAspectStyle(aspectRatio)}
+          className={`relative rounded-xl overflow-hidden bg-slate-950 flex items-center justify-center border border-slate-850 shadow-2xl select-none transition-all duration-200 ${
             zoom > 1.02 ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
           }`}
           onPointerDown={handlePointerDown}
@@ -866,7 +973,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               src={clip.url}
               playsInline
               onLoadedMetadata={handleVideoLoadedMetadata}
-              className="w-full h-full object-contain pointer-events-none"
+              className={`w-full h-full pointer-events-none ${
+                fitMode === 'cover' ? 'object-cover' : 'object-contain'
+              }`}
             />
           </div>
 

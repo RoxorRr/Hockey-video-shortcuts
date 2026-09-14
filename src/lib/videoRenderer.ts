@@ -865,16 +865,10 @@ export async function exportCombinedVideo(
   musicGain.connect(masterGain);
 
   let musicAudioEl: HTMLAudioElement | null = null;
-  let musicSourceNode: AudioBufferSourceNode | null = null;
 
   if (isMusicEnabled && bgMusic?.currentTrack) {
     const track = bgMusic.currentTrack;
-    let trackBlob = track.audioBlob;
-    if (!trackBlob && track.audioBuffer) {
-      try {
-        trackBlob = audioBufferToWav(track.audioBuffer);
-      } catch {}
-    }
+    const trackBlob = track.audioBlob;
     const trackUrl = track.audioUrl || (trackBlob ? URL.createObjectURL(trackBlob) : '');
 
     if (trackUrl) {
@@ -889,17 +883,6 @@ export async function exportCombinedVideo(
         mSrc.connect(musicGain);
       } catch (err) {
         console.warn('Could not attach background music audio element:', err);
-      }
-    } else if (track.audioBuffer) {
-      try {
-        const mSrcNode = audioContext.createBufferSource();
-        mSrcNode.buffer = track.audioBuffer;
-        mSrcNode.loop = bgMusic.loop !== false;
-        mSrcNode.connect(musicGain);
-        mSrcNode.start(0);
-        musicSourceNode = mSrcNode;
-      } catch (err) {
-        console.warn('Could not attach buffer source for background music:', err);
       }
     }
   }
@@ -1146,11 +1129,6 @@ export async function exportCombinedVideo(
           musicAudioEl.src = '';
         } catch {}
       }
-      if (musicSourceNode) {
-        try {
-          musicSourceNode.stop();
-        } catch {}
-      }
       try {
         audioContext.close();
       } catch {}
@@ -1164,7 +1142,7 @@ export async function exportCombinedVideo(
     // Start background music playback synchronously with recording
     if (musicAudioEl) {
       try {
-        musicAudioEl.currentTime = 0;
+        musicAudioEl.currentTime = bgMusic?.currentTrack?.startTimeOffset || 0;
         musicAudioEl.play().catch((err) => {
           console.warn('Could not start background music element during render:', err);
         });

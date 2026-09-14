@@ -89,6 +89,12 @@ export interface SavedPlayer {
 }
 
 export type SportsMusicStyle =
+  | 'era-80s-rock'
+  | 'era-80s-synth'
+  | 'era-90s-jams'
+  | 'era-90s-grunge'
+  | 'era-00s-punk'
+  | 'era-00s-numetal'
   | 'arena-rock'
   | 'electronic-rush'
   | 'hype-trap'
@@ -99,11 +105,20 @@ export interface AIMusicTrack {
   id: string;
   title: string;
   style: SportsMusicStyle;
+  era?: '80s' | '90s' | '00s' | 'modern';
+  artist?: string;
+  genre?: string;
+  source?: 'library' | 'uploaded' | 'url' | 'generated';
+  isCustomUpload?: boolean;
+  startTimeOffset?: number; // cue point in seconds
+  waveformPeaks?: number[];
+  fileSize?: number;
+  musicalKey?: string;
+  chordProgressionDesc?: string;
   prompt?: string;
   bpm: number;
   duration: number; // in seconds
   audioBlob?: Blob;
-  audioBuffer?: AudioBuffer;
   audioUrl?: string;
   generatedAt: number;
   energyLevel?: 'high' | 'peak' | 'epic';

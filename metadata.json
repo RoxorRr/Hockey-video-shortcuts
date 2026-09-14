@@ -1,6 +1,6 @@
 {
   "name": "Hockey Highlights Video Editor",
-  "description": "Create hockey highlight videos with AI-generated upbeat sports music, clip zoom and reframing, customizable goal horn audio, broadcast overlays, and direct YouTube export.",
+  "description": "Create hockey highlight videos with real 80s, 90s & 00s sports arena rock and dance soundtracks, custom MP3/audio upload, clip zoom and reframing, customizable goal horns, broadcast overlays, and direct YouTube export.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

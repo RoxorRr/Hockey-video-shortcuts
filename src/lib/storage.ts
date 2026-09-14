@@ -110,21 +110,89 @@ export async function saveProjectToStorage(
       };
     });
 
+    // Sanitize overlaySettings to guarantee no unclonable objects (like AudioBuffer or AudioNode) reach IndexedDB
+    let sanitizedOverlaySettings: HockeyOverlaySettings = { ...overlaySettings };
+    if (sanitizedOverlaySettings.backgroundMusic) {
+      const bg = sanitizedOverlaySettings.backgroundMusic;
+      let cleanTrack = bg.currentTrack;
+      if (cleanTrack) {
+        const {
+          id,
+          title,
+          style,
+          era,
+          artist,
+          genre,
+          source,
+          isCustomUpload,
+          startTimeOffset,
+          waveformPeaks,
+          fileSize,
+          musicalKey,
+          chordProgressionDesc,
+          prompt,
+          bpm,
+          duration,
+          audioBlob,
+          audioUrl,
+          generatedAt,
+          energyLevel,
+        } = cleanTrack as any;
+        cleanTrack = {
+          id,
+          title,
+          style,
+          era,
+          artist,
+          genre,
+          source,
+          isCustomUpload,
+          startTimeOffset: typeof startTimeOffset === 'number' ? startTimeOffset : 0,
+          waveformPeaks: Array.isArray(waveformPeaks) ? waveformPeaks : undefined,
+          fileSize,
+          musicalKey,
+          chordProgressionDesc,
+          prompt,
+          bpm,
+          duration,
+          audioBlob: audioBlob instanceof Blob ? audioBlob : undefined,
+          audioUrl: typeof audioUrl === 'string' ? audioUrl : undefined,
+          generatedAt,
+          energyLevel,
+        };
+      }
+      sanitizedOverlaySettings = {
+        ...sanitizedOverlaySettings,
+        backgroundMusic: {
+          ...bg,
+          currentTrack: cleanTrack,
+        },
+      };
+    }
+
     const projectData: SavedProjectData = {
       aspectRatio,
       transitions,
-      overlaySettings,
+      overlaySettings: sanitizedOverlaySettings,
       clips: serializedClips,
       updatedAt: Date.now(),
     };
 
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      const req = store.put(projectData, PROJECT_KEY);
+    return new Promise((resolve) => {
+      try {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.put(projectData, PROJECT_KEY);
 
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
+        req.onsuccess = () => resolve();
+        req.onerror = () => {
+          console.warn('IndexedDB put request failed:', req.error);
+          resolve();
+        };
+      } catch (putErr) {
+        console.warn('Failed to put project into IndexedDB:', putErr);
+        resolve();
+      }
     });
   } catch (err) {
     console.error('Failed to save project to IndexedDB:', err);
@@ -206,6 +274,20 @@ export async function loadProjectFromStorage(): Promise<{
                 customHornUrl: undefined,
               },
             };
+          }
+        }
+
+        // Revive background music object URL if audioBlob was saved
+        if (revivedOverlaySettings?.backgroundMusic?.currentTrack) {
+          const track = revivedOverlaySettings.backgroundMusic.currentTrack;
+          if (track.audioBlob) {
+            try {
+              track.audioUrl = URL.createObjectURL(track.audioBlob);
+            } catch (e) {
+              console.warn('Could not revive background music audio URL:', e);
+            }
+          } else if (track.audioUrl?.startsWith('blob:')) {
+            track.audioUrl = undefined;
           }
         }
 

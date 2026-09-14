@@ -181,7 +181,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             <div className="space-y-4">
               {/* Preview Player */}
               {downloadUrl && (
-                <div className="rounded-xl overflow-hidden bg-black aspect-video max-h-56 mx-auto border border-slate-800 shadow-inner">
+                <div
+                  className="rounded-xl overflow-hidden bg-black max-h-56 mx-auto border border-slate-800 shadow-inner flex items-center justify-center"
+                  style={{
+                    aspectRatio: aspectRatio === '9:16' ? '9 / 16' : aspectRatio === '1:1' ? '1 / 1' : '16 / 9',
+                    height: '100%',
+                    maxHeight: '220px',
+                    width: 'auto',
+                    maxWidth: '100%',
+                  }}
+                >
                   <video
                     src={downloadUrl}
                     controls

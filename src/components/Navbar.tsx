@@ -324,6 +324,55 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         </div>
 
+        {/* Center: Quick Aspect Ratio Switcher (Always accessible) */}
+        <div className="hidden md:flex items-center gap-1 bg-slate-950/90 border border-slate-800 rounded-xl p-1 shadow-inner">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-['Chakra_Petch'] px-2 select-none">
+            Format:
+          </span>
+          <button
+            id="quick-aspect-9-16"
+            type="button"
+            onClick={() => onAspectRatioChange('9:16')}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold font-mono transition cursor-pointer ${
+              aspectRatio === '9:16'
+                ? 'bg-red-600 text-white shadow-md shadow-red-950/60'
+                : 'text-slate-400 hover:text-white hover:bg-slate-850'
+            }`}
+            title="9:16 Vertical (Shorts, TikTok, Reels)"
+          >
+            <span className="w-2 h-3.5 border border-current rounded-2xs inline-block" />
+            <span>9:16 Shorts</span>
+          </button>
+          <button
+            id="quick-aspect-16-9"
+            type="button"
+            onClick={() => onAspectRatioChange('16:9')}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold font-mono transition cursor-pointer ${
+              aspectRatio === '16:9'
+                ? 'bg-red-600 text-white shadow-md shadow-red-950/60'
+                : 'text-slate-400 hover:text-white hover:bg-slate-850'
+            }`}
+            title="16:9 Widescreen (YouTube & Broadcast)"
+          >
+            <span className="w-3.5 h-2 border border-current rounded-2xs inline-block" />
+            <span>16:9 Wide</span>
+          </button>
+          <button
+            id="quick-aspect-1-1"
+            type="button"
+            onClick={() => onAspectRatioChange('1:1')}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold font-mono transition cursor-pointer ${
+              aspectRatio === '1:1'
+                ? 'bg-red-600 text-white shadow-md shadow-red-950/60'
+                : 'text-slate-400 hover:text-white hover:bg-slate-850'
+            }`}
+            title="1:1 Square (Instagram Feed)"
+          >
+            <span className="w-2.5 h-2.5 border border-current rounded-2xs inline-block" />
+            <span>1:1 Square</span>
+          </button>
+        </div>
+
         {/* Right Side: Account connection & Fullscreen toggle */}
         <div className="flex items-center gap-2 justify-end">
           {/* YouTube Auth Status */}

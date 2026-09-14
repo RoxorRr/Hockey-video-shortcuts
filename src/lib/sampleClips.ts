@@ -1,4 +1,4 @@
-import { VideoClip } from '../types';
+import { AspectRatio, VideoClip } from '../types';
 
 /**
  * Procedurally generates an action-packed hockey highlight video clip
@@ -8,11 +8,18 @@ function createSyntheticHockeyVideo(
   title: string,
   type: 'goal' | 'save' | 'hit' | 'ot',
   durationSec = 3.5,
-  aspectRatio: '9:16' | '16:9' = '9:16',
+  aspectRatio: AspectRatio = '9:16',
 ): Promise<VideoClip> {
   return new Promise((resolve) => {
-    const width = aspectRatio === '9:16' ? 720 : 1280;
-    const height = aspectRatio === '9:16' ? 1280 : 720;
+    let width = 720;
+    let height = 1280;
+    if (aspectRatio === '16:9') {
+      width = 1280;
+      height = 720;
+    } else if (aspectRatio === '1:1') {
+      width = 1080;
+      height = 1080;
+    }
 
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -303,7 +310,7 @@ function createSyntheticHockeyVideo(
 /**
  * Generates a default set of 3 exciting hockey clips for instant shortcut creation
  */
-export async function generateSampleHockeyClips(aspectRatio: '9:16' | '16:9' = '9:16'): Promise<VideoClip[]> {
+export async function generateSampleHockeyClips(aspectRatio: AspectRatio = '9:16'): Promise<VideoClip[]> {
   const [clip1, clip2, clip3] = await Promise.all([
     createSyntheticHockeyVideo('Snipe Goal 2026-09-08 19-30-15', 'goal', 3.2, aspectRatio),
     createSyntheticHockeyVideo('Glove Save 2026-09-08 20-14-40', 'save', 3.0, aspectRatio),
