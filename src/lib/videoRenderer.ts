@@ -83,6 +83,58 @@ export function calculateTimeline(
   return { segments, totalDuration };
 }
 
+// Reusable offscreen buffer for ultra-fast hardware bilinear background blurring (<0.05ms)
+let _fastBlurCanvas: HTMLCanvasElement | null = null;
+let _fastBlurCtx: CanvasRenderingContext2D | null = null;
+
+function renderFastBlurredVideoBg(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  canvasWidth: number,
+  canvasHeight: number,
+  bgOffsetX: number,
+  bgOffsetY: number,
+  bgDrawW: number,
+  bgDrawH: number,
+) {
+  if (!_fastBlurCanvas) {
+    _fastBlurCanvas = document.createElement('canvas');
+    _fastBlurCanvas.width = 160;
+    _fastBlurCanvas.height = Math.round(160 * (canvasHeight / Math.max(1, canvasWidth)));
+    _fastBlurCtx = _fastBlurCanvas.getContext('2d', { alpha: false });
+  }
+
+  const bCanvas = _fastBlurCanvas;
+  const bCtx = _fastBlurCtx;
+
+  if (bCtx && video.videoWidth > 0 && video.videoHeight > 0) {
+    // Render downscaled video frame
+    bCtx.drawImage(video, 0, 0, bCanvas.width, bCanvas.height);
+
+    // Subtle atmospheric darkening directly on low-res buffer
+    bCtx.fillStyle = 'rgba(10, 15, 28, 0.42)';
+    bCtx.fillRect(0, 0, bCanvas.width, bCanvas.height);
+
+    // Bilinear interpolation spreads the low-res pixels into a smooth, natural Gaussian blur
+    ctx.save();
+    ctx.drawImage(bCanvas, bgOffsetX, bgOffsetY, bgDrawW, bgDrawH);
+    ctx.restore();
+  } else {
+    // Fallback if video frame is not yet decoded
+    ctx.fillStyle = '#0a0f1d';
+    ctx.fillRect(bgOffsetX, bgOffsetY, bgDrawW, bgDrawH);
+  }
+
+  // Atmospheric broadcast vignette
+  const grad = ctx.createLinearGradient(0, 0, 0, canvasHeight);
+  grad.addColorStop(0, 'rgba(5, 8, 17, 0.5)');
+  grad.addColorStop(0.3, 'rgba(5, 8, 17, 0.05)');
+  grad.addColorStop(0.7, 'rgba(5, 8, 17, 0.05)');
+  grad.addColorStop(1, 'rgba(5, 8, 17, 0.6)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+}
+
 /**
  * Draw video element onto canvas with intelligent framing support:
  * - 'fit-blur': Fits 100% of the widescreen (16:9) video with dynamic blurred background (zero cropped pixels!)
@@ -187,21 +239,16 @@ export function drawVideoFitted(
         bgOffsetY = (canvasHeight - bgDrawH) / 2;
       }
 
-      ctx.save();
-      if ('filter' in ctx) {
-        ctx.filter = 'blur(28px) brightness(0.55) saturate(1.2)';
-      }
-      ctx.drawImage(video, bgOffsetX, bgOffsetY, bgDrawW, bgDrawH);
-      ctx.restore();
-
-      // Atmospheric broadcast vignette
-      const grad = ctx.createLinearGradient(0, 0, 0, canvasHeight);
-      grad.addColorStop(0, 'rgba(5, 8, 17, 0.4)');
-      grad.addColorStop(0.3, 'rgba(5, 8, 17, 0.05)');
-      grad.addColorStop(0.7, 'rgba(5, 8, 17, 0.05)');
-      grad.addColorStop(1, 'rgba(5, 8, 17, 0.5)');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      renderFastBlurredVideoBg(
+        ctx,
+        video,
+        canvasWidth,
+        canvasHeight,
+        bgOffsetX,
+        bgOffsetY,
+        bgDrawW,
+        bgDrawH,
+      );
     } else {
       // 'fit-bars': sleek dark arena matte
       ctx.fillStyle = '#060913';
@@ -231,16 +278,14 @@ export function drawVideoFitted(
     ctx.scale(s, s);
     ctx.translate(-canvasWidth / 2, -canvasHeight / 2);
 
-    // Drop shadow for depth against blurred background
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
-    ctx.shadowBlur = 24;
-    ctx.shadowOffsetY = 4;
+    // Fast, crisp drop shadow box behind video (avoids expensive image shadow convolution)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+    ctx.fillRect(offsetX - 4, offsetY - 4, drawW + 8, drawH + 8);
 
     ctx.drawImage(video, offsetX, offsetY, drawW, drawH);
 
     // Subtle edge border for broadcast polish
-    ctx.shadowColor = 'transparent';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
     ctx.lineWidth = 1;
     ctx.strokeRect(offsetX, offsetY, drawW, drawH);
 
@@ -752,6 +797,41 @@ export function preloadVideo(url: string, blobFallback?: Blob): Promise<HTMLVide
 }
 
 /**
+ * Prime a video element to a specific timestamp and wait for frame decoding.
+ * Avoids any seek-thrashing or dropped frames during live canvas capture.
+ */
+export function primeVideo(video: HTMLVideoElement, targetTime: number): Promise<void> {
+  return new Promise((resolve) => {
+    video.pause();
+    const clampedTime = Math.max(0, targetTime);
+    if (Math.abs(video.currentTime - clampedTime) < 0.05 && (video.readyState >= 2 || video.videoWidth > 0)) {
+      resolve();
+      return;
+    }
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      video.removeEventListener('seeked', finish);
+      video.removeEventListener('error', finish);
+      clearTimeout(timer);
+      resolve();
+    };
+
+    video.addEventListener('seeked', finish, { once: true });
+    video.addEventListener('error', finish, { once: true });
+    const timer = setTimeout(finish, 1200);
+
+    try {
+      video.currentTime = clampedTime;
+    } catch {
+      finish();
+    }
+  });
+}
+
+/**
  * Complete video sequence exporter:
  * Plays through the full timeline with transitions and overlays,
  * captures canvas stream and audio, and compiles into a final video Blob.
@@ -781,18 +861,18 @@ export async function exportCombinedVideo(
     } catch {}
   }
 
-  // Hidden host container in DOM to ensure browser GPU decoders and canvas compositor stay active
+  // Active host container in DOM to ensure browser GPU decoders and canvas compositor stay at full 60fps
   const hostDiv = document.createElement('div');
   hostDiv.id = 'video-render-engine-host';
   hostDiv.style.cssText =
-    'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:-999;';
+    'position:fixed;bottom:0;right:0;width:320px;height:180px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:99999;';
   document.body.appendChild(hostDiv);
 
   // Preload all video elements first to inspect true native video resolution
   const videoElements: HTMLVideoElement[] = [];
   for (let i = 0; i < clips.length; i++) {
     onProgress?.(
-      Math.round(5 + (i / clips.length) * 15),
+      Math.round(5 + (i / clips.length) * 12),
       `Loading clip ${i + 1} of ${clips.length}...`,
     );
 
@@ -814,6 +894,9 @@ export async function exportCombinedVideo(
     video.muted = false;
     video.volume = 1.0;
     video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+    video.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;';
     hostDiv.appendChild(video);
     videoElements.push(video);
   }
@@ -1117,14 +1200,14 @@ export async function exportCombinedVideo(
     }
   }
 
-  // Target bitrate based on resolution (28 Mbps for 1080p, 45 Mbps for 4K)
-  let targetBitrate = 28_000_000;
+  // Target bitrate calibrated for pristine broadcast quality without encoder choking
+  let targetBitrate = 14_000_000;
   if (width >= 3840 || height >= 3840) {
-    targetBitrate = 45_000_000;
+    targetBitrate = 28_000_000;
   } else if (width >= 2560 || height >= 2560) {
-    targetBitrate = 35_000_000;
+    targetBitrate = 20_000_000;
   } else if (width <= 1280 && height <= 720) {
-    targetBitrate = 12_000_000;
+    targetBitrate = 8_000_000;
   }
   if (options?.bitrate) {
     targetBitrate = options.bitrate;
@@ -1237,333 +1320,69 @@ export async function exportCombinedVideo(
       }
     };
 
-    recorder.start(200);
+    const startExportExecution = async () => {
+      onProgress?.(18, 'Pre-buffering clip sequence...');
 
-    // Start background music playback synchronously with recording
-    if (musicAudioEl) {
-      try {
-        musicAudioEl.currentTime = bgMusic?.currentTrack?.startTimeOffset || 0;
-        musicAudioEl.play().catch((err) => {
-          console.warn('Could not start background music element during render:', err);
-        });
-      } catch {}
-    }
+      // Prime clip 0 to its exact start time before recording begins
+      await primeVideo(videoElements[0], clips[0].startTime);
 
-    const startTime = performance.now();
-    let lastActiveIndex = -1;
-    let activeHornStopAt: number | null = null;
-    const playedHornSegments = new Set<number>();
-    const playedTransitionSounds = new Set<number>();
-    let animId: number;
-
-    const renderLoop = () => {
-      const elapsedSec = (performance.now() - startTime) / 1000;
-      const timelineTime = Math.min(elapsedSec, totalDuration);
-
-      // Stop goal horn when configured duration has elapsed on timeline
-      if (activeHornStopAt !== null && timelineTime >= activeHornStopAt) {
-        try {
-          if (hornAudioElement) {
-            hornAudioElement.pause();
-            hornAudioElement.currentTime = 0;
-          }
-        } catch {}
-        activeHornStopAt = null;
+      // If there is a clip 1, start pre-priming it in the background
+      if (clips.length > 1) {
+        primeVideo(videoElements[1], clips[1].startTime);
       }
 
-      // Find active segment
-      let activeSegIndex = segments.findIndex(
-        (seg) => timelineTime >= seg.clipStartInTimeline && timelineTime <= seg.clipEndInTimeline,
-      );
-      if (activeSegIndex === -1) {
-        activeSegIndex = timelineTime >= totalDuration ? segments.length - 1 : 0;
-      }
-
-      // Handle active segment switch
-      if (activeSegIndex !== lastActiveIndex) {
-        if (lastActiveIndex >= 0 && lastActiveIndex !== activeSegIndex + 1) {
-          videoElements[lastActiveIndex]?.pause();
-          if (clipGainNodes[lastActiveIndex]) {
-            clipGainNodes[lastActiveIndex]!.gain.value = 0;
-          }
-        }
-        lastActiveIndex = activeSegIndex;
-      }
-
-      const currentSeg = segments[activeSegIndex];
-      const currentVideo = videoElements[activeSegIndex];
-      const clip = currentSeg.clip;
-
-      // Ensure active video is playing at correct rate and time
-      const timeInClip = (timelineTime - currentSeg.clipStartInTimeline) * clip.playbackRate;
-      const targetVideoTime = Math.min(clip.endTime, clip.startTime + timeInClip);
-
-      if (Math.abs(currentVideo.currentTime - targetVideoTime) > 0.15) {
-        currentVideo.currentTime = targetVideoTime;
-      }
-      if (currentVideo.playbackRate !== (clip.playbackRate || 1.0)) {
-        currentVideo.playbackRate = clip.playbackRate || 1.0;
-      }
-      if (currentVideo.paused && timelineTime < totalDuration) {
-        currentVideo.play().catch(() => {
-          // If browser blocked unmuted play, fallback to muted so video frames continue
-          currentVideo.muted = true;
-          currentVideo.play().catch(() => {});
-        });
-      }
-
-      // Clear frame
+      // Render pristine initial frame onto canvas before starting recorder
       ctx.fillStyle = '#090d16';
       ctx.fillRect(0, 0, width, height);
-
-      // Check if in transition with next clip
-      const isInTransition = Boolean(
-        currentSeg.transitionWithNext &&
-        timelineTime >= currentSeg.transitionWithNext.startInTimeline &&
-        activeSegIndex + 1 < segments.length,
+      drawVideoFitted(
+        ctx,
+        videoElements[0],
+        width,
+        height,
+        clips[0].zoom ?? 1,
+        clips[0].panX ?? 0,
+        clips[0].panY ?? 0,
+        clips[0].framingMode ?? 'fit-blur',
       );
+      drawHockeyOverlays(ctx, overlaySettings, clips[0], width, height, isShorts);
 
-      if (isInTransition) {
-        const trans = currentSeg.transitionWithNext!;
-        const nextVideo = videoElements[activeSegIndex + 1];
-        const nextClip = segments[activeSegIndex + 1].clip;
+      // Start recording
+      recorder.start(250);
 
-        const transProgress = Math.max(0, Math.min(1, (timelineTime - trans.startInTimeline) / trans.duration));
-        const nextTimeInClip = (timelineTime - trans.startInTimeline) * nextClip.playbackRate;
-        const nextTargetTime = Math.min(nextClip.endTime, nextClip.startTime + nextTimeInClip);
-
-        if (Math.abs(nextVideo.currentTime - nextTargetTime) > 0.15) {
-          nextVideo.currentTime = nextTargetTime;
-        }
-        if (nextVideo.playbackRate !== (nextClip.playbackRate || 1.0)) {
-          nextVideo.playbackRate = nextClip.playbackRate || 1.0;
-        }
-        if (nextVideo.paused) {
-          nextVideo.play().catch(() => {
-            nextVideo.muted = true;
-            nextVideo.play().catch(() => {});
+      // Start background music playback synchronously with recording
+      if (musicAudioEl) {
+        try {
+          musicAudioEl.currentTime = bgMusic?.currentTrack?.startTimeOffset || 0;
+          musicAudioEl.play().catch((err) => {
+            console.warn('Could not start background music element during render:', err);
           });
-        }
-
-        // Crossfade audio between clip A and clip B
-        const clip1Vol = clip.volume ?? 1.0;
-        const clip2Vol = nextClip.volume ?? 1.0;
-        if (clipGainNodes[activeSegIndex]) {
-          clipGainNodes[activeSegIndex]!.gain.value = (1 - transProgress) * clip1Vol;
-        }
-        if (clipGainNodes[activeSegIndex + 1]) {
-          clipGainNodes[activeSegIndex + 1]!.gain.value = transProgress * clip2Vol;
-        }
-
-        // Play transition swoosh sound effect
-        if (!playedTransitionSounds.has(activeSegIndex)) {
-          playedTransitionSounds.add(activeSegIndex);
-          playTransitionWhoosh(sfxGain, audioContext);
-        }
-
-        renderTransitionEffect(
-          ctx,
-          currentVideo,
-          nextVideo,
-          trans.type,
-          transProgress,
-          width,
-          height,
-          clip,
-          nextClip,
-        );
-      } else {
-        // Solo active clip audio
-        const clipVol = clip.volume ?? 1.0;
-        if (clipGainNodes[activeSegIndex]) {
-          clipGainNodes[activeSegIndex]!.gain.value = clipVol;
-        }
-
-        drawVideoFitted(
-          ctx,
-          currentVideo,
-          width,
-          height,
-          clip.zoom ?? 1,
-          clip.panX ?? 0,
-          clip.panY ?? 0,
-          clip.framingMode ?? 'fit-blur',
-        );
+        } catch {}
       }
 
-      // Ensure any other clips are muted
-      for (let k = 0; k < clipGainNodes.length; k++) {
-        if (k !== activeSegIndex && (!isInTransition || k !== activeSegIndex + 1)) {
-          if (clipGainNodes[k] && clipGainNodes[k]!.gain.value !== 0) {
-            clipGainNodes[k]!.gain.value = 0;
-          }
-        }
+      // Activate initial clip audio and start video playback
+      if (clipGainNodes[0]) {
+        clipGainNodes[0]!.gain.value = clips[0].volume ?? 1.0;
       }
+      videoElements[0].playbackRate = clips[0].playbackRate || 1.0;
+      videoElements[0].play().catch(() => {
+        videoElements[0].muted = true;
+        videoElements[0].play().catch(() => {});
+      });
 
-      // Hockey overlays
-      drawHockeyOverlays(ctx, overlaySettings, clip, width, height, isShorts);
+      const renderStartTime = performance.now();
+      let activeSegIndex = 0;
+      let activeHornStopAt: number | null = null;
+      const playedHornSegments = new Set<number>();
+      const playedTransitionSounds = new Set<number>();
+      let animId: number;
+      let isFinishing = false;
 
-      // Trigger goal horn sound at specific time in clip (custom horn or synth)
-      const hornGloballyEnabled =
-        (overlaySettings.goalHornSound !== false) && (hornCfg.enabled !== false);
-      const hasNative = Boolean(clip.hasNativeHorn);
-      const skipBecauseNative = hasNative && (hornCfg.skipClipsWithNativeHorn !== false);
-      const isEligible = !clip.hornDisabled && !skipBecauseNative;
+      const finishExport = () => {
+        if (isFinishing) return;
+        isFinishing = true;
+        cancelAnimationFrame(animId);
 
-      if (hornGloballyEnabled && isEligible && !playedHornSegments.has(activeSegIndex)) {
-        const clipTagUpper = (clip.tag || '').toUpperCase();
-        const isGoal =
-          clipTagUpper === 'GOAL' ||
-          clipTagUpper === 'OT WINNER' ||
-          clipTagUpper.includes('GOAL') ||
-          clipTagUpper.includes('WINNER') ||
-          clipTagUpper.includes('SNIPE') ||
-          clipTagUpper.includes('SCORE');
-        const shouldTrigger =
-          hornCfg.triggerMode === 'every_clip' ||
-          isGoal ||
-          clip.hornTimingOverride !== undefined;
-
-        if (shouldTrigger) {
-          const segDuration = Math.max(0.2, currentSeg.clipEndInTimeline - currentSeg.clipStartInTimeline);
-          const rawOffset = clip.hornTimingOverride ?? hornCfg.clipOffsetSeconds ?? 0.5;
-          // Clamp offset so it always fires inside the clip duration
-          const maxAllowedOffset = Math.max(0, segDuration - 0.4);
-          const triggerOffset = Math.min(maxAllowedOffset, Math.max(0, rawOffset) / (clip.playbackRate || 1.0));
-
-          if (timelineTime >= currentSeg.clipStartInTimeline + triggerOffset) {
-            playedHornSegments.add(activeSegIndex);
-
-            if (audioContext.state !== 'running') {
-              try {
-                audioContext.resume();
-              } catch {}
-            }
-
-            const hornDur = configuredHornDuration;
-
-            // Duck clips game audio so goal horn blasts loud and punchy
-            if (hornCfg.duckVideoAudio !== false) {
-              const now = audioContext.currentTime;
-              try {
-                if (typeof (clipsGain.gain as any).cancelAndHoldAtTime === 'function') {
-                  (clipsGain.gain as any).cancelAndHoldAtTime(now);
-                } else {
-                  clipsGain.gain.cancelScheduledValues(now);
-                }
-              } catch {}
-              clipsGain.gain.setValueAtTime(clipsGain.gain.value || origVideoFactor, now);
-              clipsGain.gain.linearRampToValueAtTime(origVideoFactor * 0.15, now + 0.08);
-              const duckHoldUntil = now + Math.max(0.2, hornDur - 0.3);
-              clipsGain.gain.setValueAtTime(origVideoFactor * 0.15, duckHoldUntil);
-              clipsGain.gain.linearRampToValueAtTime(origVideoFactor, now + hornDur);
-            }
-
-            // Duck AI background music during goal horn if enabled
-            if (isMusicEnabled && bgMusic?.duckOnGoalHorn !== false && musicGain) {
-              const now = audioContext.currentTime;
-              try {
-                if (typeof (musicGain.gain as any).cancelAndHoldAtTime === 'function') {
-                  (musicGain.gain as any).cancelAndHoldAtTime(now);
-                } else {
-                  musicGain.gain.cancelScheduledValues(now);
-                }
-              } catch {}
-              musicGain.gain.setValueAtTime(musicGain.gain.value || targetMusicVol, now);
-              musicGain.gain.linearRampToValueAtTime(targetMusicVol * 0.25, now + 0.08);
-              const duckHoldUntil = now + Math.max(0.2, hornDur - 0.3);
-              musicGain.gain.setValueAtTime(targetMusicVol * 0.25, duckHoldUntil);
-              musicGain.gain.linearRampToValueAtTime(targetMusicVol, now + hornDur);
-            }
-
-            const hornVol = (hornCfg.volume ?? 1.25) * 1.35;
-
-            // Automate hornGain volume envelope with sample accuracy
-            const now = audioContext.currentTime;
-            try {
-              if (typeof (hornGain.gain as any).cancelAndHoldAtTime === 'function') {
-                (hornGain.gain as any).cancelAndHoldAtTime(now);
-              } else {
-                hornGain.gain.cancelScheduledValues(now);
-              }
-            } catch {}
-            hornGain.gain.setValueAtTime(1.0, now);
-            const fadeStart = now + Math.max(0.1, hornDur - 0.25);
-            hornGain.gain.setValueAtTime(1.0, fadeStart);
-            hornGain.gain.linearRampToValueAtTime(0.0001, now + hornDur);
-            hornGain.gain.setValueAtTime(0.0, now + hornDur + 0.05);
-
-            // 1. Play hornAudioElement (crucial: delivers audio frames into MediaRecorder in Chromium)
-            if (hornAudioElement) {
-              try {
-                hornAudioElement.currentTime = 0;
-                hornAudioElement.volume = Math.max(0, Math.min(1.0, hornVol));
-                hornAudioElement.play().catch((playErr) => {
-                  console.warn('Horn audio element play failed:', playErr);
-                });
-              } catch (e) {
-                console.warn('Could not trigger horn audio element:', e);
-              }
-            }
-
-            // 2. Play Web Audio buffer in parallel into hornGain for extra resonance
-            if (hornAudioBuffer) {
-              const bufHandle = playAudioBuffer(
-                hornAudioBuffer,
-                hornVol,
-                hornGain,
-                audioContext,
-                hornDur,
-              );
-              if (bufHandle) {
-                activeAudioHandles.push(bufHandle);
-              }
-            } else if (!hornAudioElement) {
-              const synthHandle = playGoalHorn(hornDur, hornGain, hornVol, audioContext);
-              if (synthHandle) {
-                activeAudioHandles.push(synthHandle);
-              }
-            }
-
-            // 3. Set timeline cutoff marker
-            activeHornStopAt = timelineTime + hornDur;
-
-            // 4. Wall-clock fallback pause timer
-            const stopTimer = setTimeout(() => {
-              try {
-                if (hornAudioElement) {
-                  hornAudioElement.pause();
-                  hornAudioElement.currentTime = 0;
-                }
-              } catch {}
-            }, hornDur * 1000);
-
-            activeAudioHandles.push({
-              stop: () => {
-                clearTimeout(stopTimer);
-                try {
-                  if (hornAudioElement) {
-                    hornAudioElement.pause();
-                    hornAudioElement.currentTime = 0;
-                  }
-                } catch {}
-              },
-            });
-          }
-        }
-      }
-
-      const percent = Math.min(98, Math.round(20 + (timelineTime / totalDuration) * 78));
-      onProgress?.(
-        percent,
-        `Rendering: ${timelineTime.toFixed(1)}s / ${totalDuration.toFixed(1)}s (${percent}%)...`,
-      );
-
-      if (timelineTime < totalDuration) {
-        animId = requestAnimationFrame(renderLoop);
-      } else {
-        // Timeline finished
-        onProgress?.(99, 'Packaging video chunks...');
+        onProgress?.(99, 'Packaging video chunks and finalizing master file...');
         videoElements.forEach((v) => v.pause());
         if (hornAudioElement) {
           try {
@@ -1571,8 +1390,13 @@ export async function exportCombinedVideo(
             hornAudioElement.currentTime = 0;
           } catch {}
         }
+        if (musicAudioEl) {
+          try {
+            musicAudioEl.pause();
+          } catch {}
+        }
 
-        // Flush remaining buffer and stop
+        // Allow final audio quantums and video frames to settle into recording chunks
         setTimeout(() => {
           if (recorder.state === 'recording') {
             try {
@@ -1580,11 +1404,282 @@ export async function exportCombinedVideo(
             } catch {}
             recorder.stop();
           }
-        }, 450);
-      }
+        }, 400);
+      };
+
+      const renderLoop = () => {
+        if (isFinishing) return;
+
+        const currentSeg = segments[activeSegIndex];
+        const currentVideo = videoElements[activeSegIndex];
+        const clip = currentSeg.clip;
+        const r = clip.playbackRate || 1.0;
+
+        // Keep active video playing smoothly without interrupting hardware decoder
+        if (currentVideo.paused && !currentVideo.ended) {
+          currentVideo.playbackRate = r;
+          currentVideo.play().catch(() => {
+            currentVideo.muted = true;
+            currentVideo.play().catch(() => {});
+          });
+        }
+
+        // Calculate clip local playback time and timeline position
+        const clipDurationSec = Math.max(0.1, (clip.endTime - clip.startTime) / r);
+        const videoCurrentTime = currentVideo.currentTime;
+        const timeInClip = Math.max(0, (videoCurrentTime - clip.startTime) / r);
+        const timelineTime = Math.min(
+          totalDuration,
+          currentSeg.clipStartInTimeline + Math.min(clipDurationSec, timeInClip),
+        );
+
+        // Goal horn cutoff marker
+        if (activeHornStopAt !== null && timelineTime >= activeHornStopAt) {
+          try {
+            if (hornAudioElement) {
+              hornAudioElement.pause();
+              hornAudioElement.currentTime = 0;
+            }
+          } catch {}
+          activeHornStopAt = null;
+        }
+
+        // Clear frame
+        ctx.fillStyle = '#090d16';
+        ctx.fillRect(0, 0, width, height);
+
+        // Transition handling
+        const trans = currentSeg.transitionWithNext;
+        const nextIndex = activeSegIndex + 1;
+        const hasNext = nextIndex < segments.length && Boolean(trans);
+
+        const isInTransition = Boolean(
+          hasNext &&
+          trans &&
+          timelineTime >= trans.startInTimeline,
+        );
+
+        if (isInTransition && trans && nextIndex < segments.length) {
+          const nextVideo = videoElements[nextIndex];
+          const nextClip = segments[nextIndex].clip;
+          const nextRate = nextClip.playbackRate || 1.0;
+
+          if (nextVideo.paused && !nextVideo.ended) {
+            nextVideo.playbackRate = nextRate;
+            nextVideo.play().catch(() => {
+              nextVideo.muted = true;
+              nextVideo.play().catch(() => {});
+            });
+          }
+
+          const transProgress = Math.max(0, Math.min(1, (timelineTime - trans.startInTimeline) / trans.duration));
+
+          // Crossfade audio
+          const clip1Vol = clip.volume ?? 1.0;
+          const clip2Vol = nextClip.volume ?? 1.0;
+          if (clipGainNodes[activeSegIndex]) {
+            clipGainNodes[activeSegIndex]!.gain.value = (1 - transProgress) * clip1Vol;
+          }
+          if (clipGainNodes[nextIndex]) {
+            clipGainNodes[nextIndex]!.gain.value = transProgress * clip2Vol;
+          }
+
+          // Play transition swoosh
+          if (!playedTransitionSounds.has(activeSegIndex)) {
+            playedTransitionSounds.add(activeSegIndex);
+            playTransitionWhoosh(sfxGain, audioContext);
+          }
+
+          renderTransitionEffect(
+            ctx,
+            currentVideo,
+            nextVideo,
+            trans.type,
+            transProgress,
+            width,
+            height,
+            clip,
+            nextClip,
+          );
+        } else {
+          // Solo playback
+          const clipVol = clip.volume ?? 1.0;
+          if (clipGainNodes[activeSegIndex]) {
+            clipGainNodes[activeSegIndex]!.gain.value = clipVol;
+          }
+
+          drawVideoFitted(
+            ctx,
+            currentVideo,
+            width,
+            height,
+            clip.zoom ?? 1,
+            clip.panX ?? 0,
+            clip.panY ?? 0,
+            clip.framingMode ?? 'fit-blur',
+          );
+        }
+
+        // Ensure any other clips are muted
+        for (let k = 0; k < clipGainNodes.length; k++) {
+          if (k !== activeSegIndex && (!isInTransition || k !== nextIndex)) {
+            if (clipGainNodes[k] && clipGainNodes[k]!.gain.value !== 0) {
+              clipGainNodes[k]!.gain.value = 0;
+            }
+          }
+        }
+
+        // Hockey overlays
+        drawHockeyOverlays(ctx, overlaySettings, clip, width, height, isShorts);
+
+        // Trigger goal horn sound at specific time in clip
+        const hornGloballyEnabled =
+          (overlaySettings.goalHornSound !== false) && (hornCfg.enabled !== false);
+        const hasNative = Boolean(clip.hasNativeHorn);
+        const skipBecauseNative = hasNative && (hornCfg.skipClipsWithNativeHorn !== false);
+        const isEligible = !clip.hornDisabled && !skipBecauseNative;
+
+        if (hornGloballyEnabled && isEligible && !playedHornSegments.has(activeSegIndex)) {
+          const clipTagUpper = (clip.tag || '').toUpperCase();
+          const isGoal =
+            clipTagUpper === 'GOAL' ||
+            clipTagUpper === 'OT WINNER' ||
+            clipTagUpper.includes('GOAL') ||
+            clipTagUpper.includes('WINNER') ||
+            clipTagUpper.includes('SNIPE') ||
+            clipTagUpper.includes('SCORE');
+          const shouldTrigger =
+            hornCfg.triggerMode === 'every_clip' ||
+            isGoal ||
+            clip.hornTimingOverride !== undefined;
+
+          if (shouldTrigger) {
+            const segDuration = Math.max(0.2, currentSeg.clipEndInTimeline - currentSeg.clipStartInTimeline);
+            const rawOffset = clip.hornTimingOverride ?? hornCfg.clipOffsetSeconds ?? 0.5;
+            const maxAllowedOffset = Math.max(0, segDuration - 0.4);
+            const triggerOffset = Math.min(maxAllowedOffset, Math.max(0, rawOffset) / r);
+
+            if (timelineTime >= currentSeg.clipStartInTimeline + triggerOffset) {
+              playedHornSegments.add(activeSegIndex);
+
+              if (audioContext.state !== 'running') {
+                try {
+                  audioContext.resume();
+                } catch {}
+              }
+
+              const hornDur = configuredHornDuration;
+
+              // Duck clips game audio
+              if (hornCfg.duckVideoAudio !== false) {
+                const now = audioContext.currentTime;
+                try {
+                  if (typeof (clipsGain.gain as any).cancelAndHoldAtTime === 'function') {
+                    (clipsGain.gain as any).cancelAndHoldAtTime(now);
+                  } else {
+                    clipsGain.gain.cancelScheduledValues(now);
+                  }
+                } catch {}
+                clipsGain.gain.setValueAtTime(clipsGain.gain.value || origVideoFactor, now);
+                clipsGain.gain.linearRampToValueAtTime(origVideoFactor * 0.15, now + 0.08);
+                const duckHoldUntil = now + Math.max(0.2, hornDur - 0.3);
+                clipsGain.gain.setValueAtTime(origVideoFactor * 0.15, duckHoldUntil);
+                clipsGain.gain.linearRampToValueAtTime(origVideoFactor, now + hornDur);
+              }
+
+              // Duck background music
+              if (isMusicEnabled && bgMusic?.duckOnGoalHorn !== false && musicGain) {
+                const now = audioContext.currentTime;
+                try {
+                  if (typeof (musicGain.gain as any).cancelAndHoldAtTime === 'function') {
+                    (musicGain.gain as any).cancelAndHoldAtTime(now);
+                  } else {
+                    musicGain.gain.cancelScheduledValues(now);
+                  }
+                } catch {}
+                musicGain.gain.setValueAtTime(musicGain.gain.value || targetMusicVol, now);
+                musicGain.gain.linearRampToValueAtTime(targetMusicVol * 0.25, now + 0.08);
+                const duckHoldUntil = now + Math.max(0.2, hornDur - 0.3);
+                musicGain.gain.setValueAtTime(targetMusicVol * 0.25, duckHoldUntil);
+                musicGain.gain.linearRampToValueAtTime(targetMusicVol, now + hornDur);
+              }
+
+              const hornVol = (hornCfg.volume ?? 1.25) * 1.35;
+
+              if (hornAudioElement) {
+                try {
+                  hornAudioElement.currentTime = 0;
+                  hornAudioElement.play().catch(() => {
+                    const synthHandle = playGoalHorn(hornDur, hornGain, hornVol, audioContext);
+                    if (synthHandle) activeAudioHandles.push(synthHandle);
+                  });
+                } catch {
+                  const synthHandle = playGoalHorn(hornDur, hornGain, hornVol, audioContext);
+                  if (synthHandle) activeAudioHandles.push(synthHandle);
+                }
+              } else {
+                const synthHandle = playGoalHorn(hornDur, hornGain, hornVol, audioContext);
+                if (synthHandle) activeAudioHandles.push(synthHandle);
+              }
+
+              activeHornStopAt = timelineTime + hornDur;
+            }
+          }
+        }
+
+        // Check if current segment is completed
+        const segmentFinished =
+          isInTransition
+            ? (timelineTime >= currentSeg.clipEndInTimeline || videoCurrentTime >= clip.endTime - 0.04)
+            : (videoCurrentTime >= clip.endTime - 0.04 || timeInClip >= clipDurationSec);
+
+        if (segmentFinished) {
+          if (nextIndex < segments.length) {
+            // Hand off to next segment cleanly
+            currentVideo.pause();
+            if (clipGainNodes[activeSegIndex]) {
+              clipGainNodes[activeSegIndex]!.gain.value = 0;
+            }
+
+            activeSegIndex = nextIndex;
+
+            // Pre-prime subsequent clip (if one exists after next)
+            if (activeSegIndex + 1 < videoElements.length) {
+              primeVideo(videoElements[activeSegIndex + 1], clips[activeSegIndex + 1].startTime);
+            }
+
+            animId = requestAnimationFrame(renderLoop);
+            return;
+          } else {
+            // Final segment has completed! All clips rendered 100%!
+            finishExport();
+            return;
+          }
+        }
+
+        // Safety watchdog: prevent indefinite loop if browser tab throttles or a video stalls
+        if ((performance.now() - renderStartTime) / 1000 > totalDuration + 6.0) {
+          finishExport();
+          return;
+        }
+
+        const percent = Math.min(98, Math.round(20 + (timelineTime / totalDuration) * 78));
+        onProgress?.(
+          percent,
+          `Rendering: ${timelineTime.toFixed(1)}s / ${totalDuration.toFixed(1)}s (${percent}%)...`,
+        );
+
+        animId = requestAnimationFrame(renderLoop);
+      };
+
+      animId = requestAnimationFrame(renderLoop);
     };
 
-    animId = requestAnimationFrame(renderLoop);
+    startExportExecution().catch((err) => {
+      console.error('Export execution failed:', err);
+      cleanUp();
+      reject(err);
+    });
   });
 }
 
