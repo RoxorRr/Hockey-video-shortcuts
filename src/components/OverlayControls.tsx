@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { HockeyOverlaySettings, GoalHornConfig, VideoClip, ScorebugConfig, PlayerBannerConfig } from '../types';
 import { PlayerRosterPicker } from './PlayerRosterPicker';
+import { AIMusicControls } from './AIMusicControls';
 import { autoRememberPlayer } from '../lib/rosterStorage';
 import { saveRememberedScorebug, getRememberedScorebug } from '../lib/scorebugStorage';
 import {
@@ -53,7 +54,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isPlayingHorn, setIsPlayingHorn] = useState(false);
   const activeHornStopRef = useRef<(() => void) | null>(null);
-  const [activeTab, setActiveTab] = useState<'scorebug' | 'player' | 'horn' | 'fx'>('scorebug');
+  const [activeTab, setActiveTab] = useState<'scorebug' | 'player' | 'horn' | 'music' | 'fx'>('scorebug');
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
 
   // Remembered game scorebug state
@@ -632,7 +633,24 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
           }`}
         >
           <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-          <span>Horn FX</span>
+          <span>Horn</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('music')}
+          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+            activeTab === 'music'
+              ? 'bg-red-600 text-white shadow-sm shadow-red-950/40'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900'
+          }`}
+          title="AI Sports Music Generator (Upbeat & Vocal-Free)"
+        >
+          <Music className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Music</span>
+          {settings.backgroundMusic?.enabled && (
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0 shadow-xs animate-pulse" />
+          )}
         </button>
 
         <button
@@ -1481,6 +1499,32 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
               </label>
             </div>
           </div>
+        )}
+
+        {/* ==================== TAB 4: AI SPORTS MUSIC ==================== */}
+        {activeTab === 'music' && (
+          <AIMusicControls
+            settings={
+              settings.backgroundMusic || {
+                enabled: false,
+                volume: 0.75,
+                originalVideoVolume: 1.0,
+                duckOnGoalHorn: true,
+                loop: true,
+                currentTrack: null,
+                selectedStyle: 'arena-rock',
+                customPrompt: '',
+              }
+            }
+            onChange={(updated) => onChange({ ...settings, backgroundMusic: updated })}
+            totalVideoDuration={clips.reduce((acc, c) => {
+              const dur = Math.max(
+                0.1,
+                ((c.endTime || c.originalDuration || 5) - (c.startTime || 0)) / (c.playbackRate || 1),
+              );
+              return acc + dur;
+            }, 0)}
+          />
         )}
       </div>
     </div>

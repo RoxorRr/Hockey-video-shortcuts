@@ -59,6 +59,16 @@ export default function App() {
     },
     redSirenFlash: true,
     showStamps: true,
+    backgroundMusic: {
+      enabled: false,
+      volume: 0.75,
+      originalVideoVolume: 1.0,
+      duckOnGoalHorn: true,
+      loop: true,
+      currentTrack: null,
+      selectedStyle: 'arena-rock',
+      customPrompt: '',
+    },
   });
 
   // Active Clip Selection for Instant Main-Stage Editing

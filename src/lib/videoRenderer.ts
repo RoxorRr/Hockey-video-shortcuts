@@ -850,9 +850,59 @@ export async function exportCombinedVideo(
   }
 
   // Sub-mixer for video clips (with dynamic ducking when goal horn sounds)
+  const bgMusic = overlaySettings.backgroundMusic;
+  const isMusicEnabled = Boolean(bgMusic?.enabled && bgMusic?.currentTrack);
+  const origVideoFactor = bgMusic?.originalVideoVolume ?? 1.0;
+
   const clipsGain = audioContext.createGain();
-  clipsGain.gain.value = 1.0;
+  clipsGain.gain.value = origVideoFactor; // Preserves original clip audio and video music
   clipsGain.connect(masterGain);
+
+  // Sub-mixer for AI Background Music (upbeat sports music without vocals)
+  const musicGain = audioContext.createGain();
+  const targetMusicVol = isMusicEnabled ? (bgMusic?.volume ?? 0.75) : 0.0;
+  musicGain.gain.value = targetMusicVol;
+  musicGain.connect(masterGain);
+
+  let musicAudioEl: HTMLAudioElement | null = null;
+  let musicSourceNode: AudioBufferSourceNode | null = null;
+
+  if (isMusicEnabled && bgMusic?.currentTrack) {
+    const track = bgMusic.currentTrack;
+    let trackBlob = track.audioBlob;
+    if (!trackBlob && track.audioBuffer) {
+      try {
+        trackBlob = audioBufferToWav(track.audioBuffer);
+      } catch {}
+    }
+    const trackUrl = track.audioUrl || (trackBlob ? URL.createObjectURL(trackBlob) : '');
+
+    if (trackUrl) {
+      try {
+        const mEl = new Audio();
+        mEl.src = trackUrl;
+        mEl.loop = bgMusic.loop !== false;
+        mEl.preload = 'auto';
+        hostDiv.appendChild(mEl);
+        musicAudioEl = mEl;
+        const mSrc = audioContext.createMediaElementSource(mEl);
+        mSrc.connect(musicGain);
+      } catch (err) {
+        console.warn('Could not attach background music audio element:', err);
+      }
+    } else if (track.audioBuffer) {
+      try {
+        const mSrcNode = audioContext.createBufferSource();
+        mSrcNode.buffer = track.audioBuffer;
+        mSrcNode.loop = bgMusic.loop !== false;
+        mSrcNode.connect(musicGain);
+        mSrcNode.start(0);
+        musicSourceNode = mSrcNode;
+      } catch (err) {
+        console.warn('Could not attach buffer source for background music:', err);
+      }
+    }
+  }
 
   // Sub-mixer for goal horn and sound FX (boosted to ensure horn is punchy over clips)
   const sfxGain = audioContext.createGain();
@@ -1090,6 +1140,17 @@ export async function exportCombinedVideo(
           hornAudioElement.src = '';
         } catch {}
       }
+      if (musicAudioEl) {
+        try {
+          musicAudioEl.pause();
+          musicAudioEl.src = '';
+        } catch {}
+      }
+      if (musicSourceNode) {
+        try {
+          musicSourceNode.stop();
+        } catch {}
+      }
       try {
         audioContext.close();
       } catch {}
@@ -1099,6 +1160,16 @@ export async function exportCombinedVideo(
     };
 
     recorder.start(200);
+
+    // Start background music playback synchronously with recording
+    if (musicAudioEl) {
+      try {
+        musicAudioEl.currentTime = 0;
+        musicAudioEl.play().catch((err) => {
+          console.warn('Could not start background music element during render:', err);
+        });
+      } catch {}
+    }
 
     const startTime = performance.now();
     let lastActiveIndex = -1;
@@ -1302,11 +1373,28 @@ export async function exportCombinedVideo(
                   clipsGain.gain.cancelScheduledValues(now);
                 }
               } catch {}
-              clipsGain.gain.setValueAtTime(clipsGain.gain.value || 1.0, now);
-              clipsGain.gain.linearRampToValueAtTime(0.12, now + 0.08);
+              clipsGain.gain.setValueAtTime(clipsGain.gain.value || origVideoFactor, now);
+              clipsGain.gain.linearRampToValueAtTime(origVideoFactor * 0.15, now + 0.08);
               const duckHoldUntil = now + Math.max(0.2, hornDur - 0.3);
-              clipsGain.gain.setValueAtTime(0.12, duckHoldUntil);
-              clipsGain.gain.linearRampToValueAtTime(1.0, now + hornDur);
+              clipsGain.gain.setValueAtTime(origVideoFactor * 0.15, duckHoldUntil);
+              clipsGain.gain.linearRampToValueAtTime(origVideoFactor, now + hornDur);
+            }
+
+            // Duck AI background music during goal horn if enabled
+            if (isMusicEnabled && bgMusic?.duckOnGoalHorn !== false && musicGain) {
+              const now = audioContext.currentTime;
+              try {
+                if (typeof (musicGain.gain as any).cancelAndHoldAtTime === 'function') {
+                  (musicGain.gain as any).cancelAndHoldAtTime(now);
+                } else {
+                  musicGain.gain.cancelScheduledValues(now);
+                }
+              } catch {}
+              musicGain.gain.setValueAtTime(musicGain.gain.value || targetMusicVol, now);
+              musicGain.gain.linearRampToValueAtTime(targetMusicVol * 0.25, now + 0.08);
+              const duckHoldUntil = now + Math.max(0.2, hornDur - 0.3);
+              musicGain.gain.setValueAtTime(targetMusicVol * 0.25, duckHoldUntil);
+              musicGain.gain.linearRampToValueAtTime(targetMusicVol, now + hornDur);
             }
 
             const hornVol = (hornCfg.volume ?? 1.25) * 1.35;

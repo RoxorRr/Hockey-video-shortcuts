@@ -152,6 +152,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     hasNativeHorn && effectiveHornConfig.skipClipsWithNativeHorn !== false;
   const isEligibleForHorn = isHornGloballyEnabled && !hornDisabled && !isNativeHornSkipped;
 
+  // Background Music configuration
+  const bgMusic = overlaySettings.backgroundMusic;
+  const bgMusicAudioRef = useRef<HTMLAudioElement | null>(null);
+
   const trimmedDuration = Math.max(0.1, (endTime - startTime) / playbackRate);
   const activeTriggerOffset = useCustomTiming
     ? Math.max(0, Math.min(trimmedDuration, hornTimingOverride))
@@ -206,11 +210,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       activeHornStopRef.current = null;
     }
     setIsHornFiring(false);
+    const origFactor = bgMusic?.originalVideoVolume ?? 1.0;
     if (videoRef.current && isDuckedRef.current) {
-      videoRef.current.volume = volume;
+      videoRef.current.volume = volume * origFactor;
       isDuckedRef.current = false;
     }
-  }, [volume]);
+    if (bgMusicAudioRef.current && bgMusic?.enabled) {
+      bgMusicAudioRef.current.volume = Math.max(0, Math.min(1.0, bgMusic.volume ?? 0.75));
+    }
+  }, [volume, bgMusic?.originalVideoVolume, bgMusic?.enabled, bgMusic?.volume]);
 
   // Stop audition audio
   const stopAudition = useCallback(() => {
@@ -246,18 +254,69 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [activeIndex, clip?.id, stopActiveHorn, stopAudition]);
 
-  // Sync volume & playback rate to video element
+  // Sync volume & playback rate to video element (preserving original video audio balance)
   useEffect(() => {
     if (videoRef.current && !isDuckedRef.current) {
-      videoRef.current.volume = volume;
+      const origFactor = bgMusic?.originalVideoVolume ?? 1.0;
+      videoRef.current.volume = Math.max(0, Math.min(1.0, volume * origFactor));
     }
-  }, [volume]);
+  }, [volume, bgMusic?.originalVideoVolume]);
 
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.playbackRate = playbackRate;
     }
   }, [playbackRate]);
+
+  // Synchronize AI background music track playback and volume
+  useEffect(() => {
+    const isEnabled = Boolean(bgMusic?.enabled && bgMusic?.currentTrack);
+    if (!isEnabled) {
+      if (bgMusicAudioRef.current) {
+        try {
+          bgMusicAudioRef.current.pause();
+          bgMusicAudioRef.current.src = '';
+        } catch {}
+      }
+      return;
+    }
+
+    const track = bgMusic!.currentTrack!;
+    let url = track.audioUrl;
+    if (!url && track.audioBlob) {
+      url = URL.createObjectURL(track.audioBlob);
+    }
+    if (!url) return;
+
+    if (!bgMusicAudioRef.current) {
+      bgMusicAudioRef.current = new Audio();
+    }
+    const audio = bgMusicAudioRef.current;
+    if (audio.src !== url) {
+      audio.src = url;
+    }
+    audio.loop = bgMusic?.loop !== false;
+    const baseVol = bgMusic?.volume ?? 0.75;
+    audio.volume = Math.max(0, Math.min(1.0, baseVol * (isDuckedRef.current ? 0.25 : 1.0)));
+
+    if (isPlaying) {
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+    }
+  }, [bgMusic?.enabled, bgMusic?.currentTrack, bgMusic?.volume, bgMusic?.loop, isPlaying]);
+
+  // Cleanup background music audio element on unmount
+  useEffect(() => {
+    return () => {
+      if (bgMusicAudioRef.current) {
+        try {
+          bgMusicAudioRef.current.pause();
+          bgMusicAudioRef.current.src = '';
+        } catch {}
+      }
+    };
+  }, []);
 
   // Playback & Goal Horn Check Loop
   useEffect(() => {
@@ -308,14 +367,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   effectiveHornConfig.customHornDuration ??
                   5.0) * 1000;
 
+              const origFactor = bgMusic?.originalVideoVolume ?? 1.0;
+              const baseVidVol = volume * origFactor;
+
               if (effectiveHornConfig.duckVideoAudio && videoRef.current) {
-                videoRef.current.volume = volume * 0.15;
+                videoRef.current.volume = baseVidVol * 0.15;
                 isDuckedRef.current = true;
+
+                // Duck AI Background Music concurrently
+                if (bgMusicAudioRef.current && bgMusic?.enabled && bgMusic?.duckOnGoalHorn !== false) {
+                  bgMusicAudioRef.current.volume = Math.max(
+                    0,
+                    Math.min(1.0, (bgMusic.volume ?? 0.75) * 0.25),
+                  );
+                }
+
                 duckTimeoutRef.current = setTimeout(() => {
                   setIsHornFiring(false);
                   if (videoRef.current && isDuckedRef.current) {
-                    videoRef.current.volume = volume;
+                    videoRef.current.volume = baseVidVol;
                     isDuckedRef.current = false;
+                  }
+                  if (bgMusicAudioRef.current && bgMusic?.enabled) {
+                    bgMusicAudioRef.current.volume = Math.max(
+                      0,
+                      Math.min(1.0, bgMusic.volume ?? 0.75),
+                    );
                   }
                 }, durMs);
               } else {

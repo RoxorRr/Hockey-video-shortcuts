@@ -1,6 +1,6 @@
 {
   "name": "Hockey Highlights Video Editor",
-  "description": "Create hockey highlight shortcuts with individual clip zoom and player framing, customizable goal horn audio, arena graphics, transitions, and direct YouTube upload.",
+  "description": "Create hockey highlight videos with AI-generated upbeat sports music, clip zoom and reframing, customizable goal horn audio, broadcast overlays, and direct YouTube export.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

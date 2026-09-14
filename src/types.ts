@@ -88,11 +88,44 @@ export interface SavedPlayer {
   updatedAt?: number;
 }
 
+export type SportsMusicStyle =
+  | 'arena-rock'
+  | 'electronic-rush'
+  | 'hype-trap'
+  | 'cinematic-brass'
+  | 'stadium-90s';
+
+export interface AIMusicTrack {
+  id: string;
+  title: string;
+  style: SportsMusicStyle;
+  prompt?: string;
+  bpm: number;
+  duration: number; // in seconds
+  audioBlob?: Blob;
+  audioBuffer?: AudioBuffer;
+  audioUrl?: string;
+  generatedAt: number;
+  energyLevel?: 'high' | 'peak' | 'epic';
+}
+
+export interface BackgroundMusicSettings {
+  enabled: boolean;
+  volume: number; // 0.0 to 1.5, default 0.75
+  originalVideoVolume: number; // 0.0 to 1.5, default 1.0 (keeps original audio intact)
+  duckOnGoalHorn: boolean; // default true (ducks music when goal horn sounds)
+  loop: boolean; // default true
+  currentTrack: AIMusicTrack | null;
+  selectedStyle: SportsMusicStyle;
+  customPrompt: string;
+}
+
 export interface HockeyOverlaySettings {
   scorebug: ScorebugConfig;
   playerBanner: PlayerBannerConfig;
   goalHornSound: boolean;
   hornConfig?: GoalHornConfig;
+  backgroundMusic?: BackgroundMusicSettings;
   redSirenFlash: boolean;
   showStamps: boolean;
 }
