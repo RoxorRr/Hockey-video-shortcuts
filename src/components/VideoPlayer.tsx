@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { AspectRatio, HockeyOverlaySettings, Transition, VideoClip } from '../types';
 import {
-  calculateTimeline,
-  drawHockeyOverlays,
-  drawVideoFitted,
-  preloadVideo,
-  renderTransitionEffect,
-} from '../lib/videoRenderer';
+  AspectRatio,
+  HockeyOverlaySettings,
+  HockeyTag,
+  ScorebugConfig,
+  PlayerBannerConfig,
+  Transition,
+  VideoClip,
+} from '../types';
 import { playHornSound } from '../lib/audio';
 import {
   Play,
@@ -14,732 +15,1373 @@ import {
   RotateCcw,
   Volume2,
   VolumeX,
-  Maximize2,
   Sparkles,
   Plus,
   ZoomIn,
   ZoomOut,
   Crosshair,
+  SlidersHorizontal,
+  Move,
+  Eye,
+  EyeOff,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Tv,
+  Scissors,
+  Flame,
+  Check,
+  Trash2,
+  Maximize2,
 } from 'lucide-react';
 
 interface VideoPlayerProps {
   clips: VideoClip[];
-  transitions: Transition[];
+  selectedClipIndex: number | null;
+  onSelectClipIndex?: (index: number) => void;
+  onUpdateClip?: (index: number, updated: VideoClip) => void;
+  onRemoveClip?: (index: number) => void;
+  onMoveClip?: (index: number, direction: 'left' | 'right') => void;
   overlaySettings: HockeyOverlaySettings;
   aspectRatio: AspectRatio;
   onAddSampleClips: () => void;
   onOpenUploadDialog: () => void;
-  currentTime: number;
-  onTimeUpdate: (time: number) => void;
-  onUpdateClip?: (index: number, updated: VideoClip) => void;
-  selectedClipIndex?: number | null;
+  // Optional backwards-compat props from earlier full-timeline implementation
+  transitions?: Transition[];
+  currentTime?: number;
+  onTimeUpdate?: (time: number) => void;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   clips,
-  transitions,
+  selectedClipIndex,
+  onSelectClipIndex,
+  onUpdateClip,
+  onRemoveClip,
+  onMoveClip,
   overlaySettings,
   aspectRatio,
   onAddSampleClips,
   onOpenUploadDialog,
-  currentTime,
-  onTimeUpdate,
-  onUpdateClip,
-  selectedClipIndex,
 }) => {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const videoElementsRef = useRef<HTMLVideoElement[]>([]);
-  const animationFrameRef = useRef<number | null>(null);
-  const lastTimestampRef = useRef<number | null>(null);
-  const playedHornClipIndicesRef = useRef<Set<number>>(new Set());
-  const activeHornStopRef = useRef<(() => void) | null>(null);
-  const isDuckingAudioRef = useRef<boolean>(false);
-  const currentTimeRef = useRef<number>(currentTime);
+  // Determine active clip index
+  const activeIndex =
+    selectedClipIndex !== null &&
+    selectedClipIndex !== undefined &&
+    selectedClipIndex >= 0 &&
+    selectedClipIndex < clips.length
+      ? selectedClipIndex
+      : clips.length > 0
+      ? 0
+      : null;
 
+  const clip = activeIndex !== null ? clips[activeIndex] : null;
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
+  const [currentPlayTime, setCurrentPlayTime] = useState(0);
+  const [isAuditioningHorn, setIsAuditioningHorn] = useState(false);
+  const [showOverlaysPreview, setShowOverlaysPreview] = useState(true);
+  const [isHornFiring, setIsHornFiring] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
 
-  useEffect(() => {
-    currentTimeRef.current = currentTime;
-  }, [currentTime]);
+  // Audio & Horn refs
+  const activeHornStopRef = useRef<(() => void) | null>(null);
+  const activeAuditionStopRef = useRef<(() => void) | null>(null);
+  const hornTriggeredRef = useRef(false);
+  const isDuckedRef = useRef(false);
+  const duckTimeoutRef = useRef<any>(null);
+  const rafRef = useRef<number | null>(null);
 
-  const { segments, totalDuration } = calculateTimeline(clips, transitions);
+  // Interactive Horn Drag state
+  const [isDraggingHornMarker, setIsDraggingHornMarker] = useState(false);
+  const [isDraggingTimelineHorn, setIsDraggingTimelineHorn] = useState(false);
+  const scrubberRef = useRef<HTMLDivElement>(null);
+  const timelineBarRef = useRef<HTMLDivElement>(null);
 
-  // Preload videos when clips change
-  useEffect(() => {
-    let isCancelled = false;
-    videoElementsRef.current.forEach((v) => {
-      v.pause();
-      v.src = '';
-    });
-    videoElementsRef.current = [];
+  // Pointer drag state for video pan
+  const isDraggingRef = useRef(false);
+  const dragStartRef = useRef<{ x: number; y: number; startPanX: number; startPanY: number }>({
+    x: 0,
+    y: 0,
+    startPanX: 0,
+    startPanY: 0,
+  });
+  const hasDraggedRef = useRef(false);
 
-    const loadAll = async () => {
-      const elements: HTMLVideoElement[] = [];
-      for (const clip of clips) {
-        try {
-          let activeUrl = clip.url;
-          if (clip.blob instanceof Blob && (!activeUrl || activeUrl.startsWith('blob:'))) {
-            try {
-              activeUrl = URL.createObjectURL(clip.blob);
-              clip.url = activeUrl;
-            } catch {}
-          }
-          const v = await preloadVideo(activeUrl, clip.blob);
-          v.volume = isMuted ? 0 : clip.volume;
-          elements.push(v);
-        } catch (err) {
-          console.error('Error preloading video:', clip.name, err);
-        }
-      }
-      if (!isCancelled) {
-        videoElementsRef.current = elements;
-        renderAtTime(currentTime);
-      }
-    };
-
-    if (clips.length > 0) {
-      loadAll();
+  // Clip state parameters
+  const [maxDuration, setMaxDuration] = useState<number>(() => {
+    if (clip && Number.isFinite(clip.originalDuration) && clip.originalDuration > 0.1) {
+      return clip.originalDuration;
     }
+    return 5.0;
+  });
 
-    return () => {
-      isCancelled = true;
-    };
-  }, [clips]);
+  const startTime = clip && Number.isFinite(clip.startTime) ? clip.startTime : 0;
+  const endTime =
+    clip && Number.isFinite(clip.endTime) && clip.endTime > startTime
+      ? clip.endTime
+      : maxDuration;
+  const volume = clip?.volume ?? 1;
+  const playbackRate = clip?.playbackRate ?? 1;
+  const zoom = clip?.zoom ?? 1.0;
+  const panX = clip?.panX ?? 0;
+  const panY = clip?.panY ?? 0;
+  const tag = clip?.tag;
+  const customTagText = clip?.customTagText || '';
+  const hornDisabled = Boolean(clip?.hornDisabled);
+  const hasNativeHorn = Boolean(clip?.hasNativeHorn);
+  const useCustomTiming = clip?.hornTimingOverride !== undefined;
+  const hornTimingOverride = clip?.hornTimingOverride ?? 0.5;
 
-  // Sync mute state to video elements
-  useEffect(() => {
-    videoElementsRef.current.forEach((v, i) => {
-      v.volume = isMuted ? 0 : (clips[i]?.volume ?? 1);
-    });
-  }, [isMuted, clips]);
+  // Effective horn settings
+  const effectiveHornConfig = overlaySettings.hornConfig || {
+    enabled: overlaySettings.goalHornSound,
+    useCustomHorn: false,
+    triggerMode: 'every_clip',
+    clipOffsetSeconds: 0.5,
+    volume: 1.0,
+    hornDuration: 5.0,
+    skipClipsWithNativeHorn: true,
+    duckVideoAudio: true,
+  };
 
-  // Render frame at a specific timeline timestamp
-  const renderAtTime = useCallback(
-    (time: number) => {
-      const canvas = canvasRef.current;
-      if (!canvas || clips.length === 0 || segments.length === 0) return;
+  const isHornGloballyEnabled =
+    overlaySettings.goalHornSound !== false && effectiveHornConfig.enabled !== false;
+  const isNativeHornSkipped =
+    hasNativeHorn && effectiveHornConfig.skipClipsWithNativeHorn !== false;
+  const isEligibleForHorn = isHornGloballyEnabled && !hornDisabled && !isNativeHornSkipped;
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+  const trimmedDuration = Math.max(0.1, (endTime - startTime) / playbackRate);
+  const activeTriggerOffset = useCustomTiming
+    ? Math.max(0, Math.min(trimmedDuration, hornTimingOverride))
+    : Math.max(0, Math.min(trimmedDuration, effectiveHornConfig.clipOffsetSeconds ?? 0.5));
+  const targetVideoTimestamp = startTime + activeTriggerOffset * playbackRate;
 
-      const width = canvas.width;
-      const height = canvas.height;
-      const isShorts = aspectRatio === '9:16';
-
-      // Clamp time
-      const clampedTime = Math.max(0, Math.min(time, totalDuration));
-
-      // Find active segment
-      let activeIndex = segments.findIndex(
-        (seg) => clampedTime >= seg.clipStartInTimeline && clampedTime <= seg.clipEndInTimeline,
-      );
-      if (activeIndex === -1) {
-        activeIndex = clampedTime >= totalDuration ? segments.length - 1 : 0;
-      }
-
-      const seg = segments[activeIndex];
-      const video = videoElementsRef.current[activeIndex];
-      const clip = seg.clip;
-
-      // Clear canvas
-      ctx.fillStyle = '#090d16';
-      ctx.fillRect(0, 0, width, height);
-
-      if (video && video.readyState >= 2) {
-        // Calculate clip source time
-        const timeInClip = (clampedTime - seg.clipStartInTimeline) * clip.playbackRate;
-        const videoCurrentTime = Math.min(clip.endTime, clip.startTime + timeInClip);
-        if (Math.abs(video.currentTime - videoCurrentTime) > 0.08) {
-          video.currentTime = videoCurrentTime;
+  // Effective live overlays
+  const effectiveScorebug: ScorebugConfig =
+    clip?.useCustomOverlays && clip?.scorebugOverride
+      ? {
+          ...overlaySettings.scorebug,
+          ...clip.scorebugOverride,
+          enabled: clip.scorebugOverride.enabled !== false,
         }
+      : overlaySettings.scorebug;
 
-        if (isPlaying && !isMuted) {
-          const baseVol = clip.volume ?? 1.0;
-          const vol = isDuckingAudioRef.current ? baseVol * 0.15 : baseVol;
-          if (video.volume !== vol) video.volume = vol;
-          if (video.muted) video.muted = false;
-          if (video.paused) {
-            video.play().catch(() => {});
-          }
-        } else {
-          if (!video.paused) video.pause();
+  const effectivePlayerBanner: PlayerBannerConfig =
+    clip?.useCustomOverlays && clip?.playerBannerOverride
+      ? {
+          ...overlaySettings.playerBanner,
+          ...clip.playerBannerOverride,
+          enabled: clip.playerBannerOverride.enabled !== false,
         }
+      : overlaySettings.playerBanner;
 
-        // Pause all other video elements to prevent background audio leaks
-        videoElementsRef.current.forEach((v, idx) => {
-          if (idx !== activeIndex && !v.paused) {
-            try {
-              v.pause();
-            } catch {}
-          }
+  const effectiveTag = tag;
+  const effectiveTagText = customTagText || (effectiveTag ? effectiveTag : '');
+
+  // Helper to update clip fields
+  const updateClipField = useCallback(
+    (updates: Partial<VideoClip>) => {
+      if (activeIndex !== null && clip && onUpdateClip) {
+        onUpdateClip(activeIndex, {
+          ...clip,
+          ...updates,
         });
-
-        // Check if currently inside transition with next clip
-        if (
-          seg.transitionWithNext &&
-          clampedTime >= seg.transitionWithNext.startInTimeline &&
-          activeIndex + 1 < segments.length
-        ) {
-          const trans = seg.transitionWithNext;
-          const nextVideo = videoElementsRef.current[activeIndex + 1];
-          const nextClip = segments[activeIndex + 1].clip;
-
-          if (nextVideo && nextVideo.readyState >= 2) {
-            const transProgress = (clampedTime - trans.startInTimeline) / trans.duration;
-            const nextTimeInClip = (clampedTime - trans.startInTimeline) * nextClip.playbackRate;
-            nextVideo.currentTime = Math.min(nextClip.endTime, nextClip.startTime + nextTimeInClip);
-
-            renderTransitionEffect(
-              ctx,
-              video,
-              nextVideo,
-              trans.type,
-              transProgress,
-              width,
-              height,
-              clip,
-              nextClip,
-            );
-          } else {
-            drawVideoFitted(
-              ctx,
-              video,
-              width,
-              height,
-              clip.zoom ?? 1,
-              clip.panX ?? 0,
-              clip.panY ?? 0,
-            );
-          }
-        } else {
-          drawVideoFitted(
-            ctx,
-            video,
-            width,
-            height,
-            clip.zoom ?? 1,
-            clip.panX ?? 0,
-            clip.panY ?? 0,
-          );
-        }
-      } else {
-        // Video loading or placeholder
-        ctx.fillStyle = '#1e293b';
-        ctx.fillRect(0, 0, width, height);
       }
-
-      // Draw Hockey Overlays
-      drawHockeyOverlays(ctx, overlaySettings, clip, width, height, isShorts);
     },
-    [clips, segments, totalDuration, overlaySettings, aspectRatio],
+    [activeIndex, clip, onUpdateClip],
   );
 
-  // Playback Loop
+  // Stop active horn playback
+  const stopActiveHorn = useCallback(() => {
+    if (duckTimeoutRef.current) {
+      clearTimeout(duckTimeoutRef.current);
+      duckTimeoutRef.current = null;
+    }
+    if (activeHornStopRef.current) {
+      try {
+        activeHornStopRef.current();
+      } catch {}
+      activeHornStopRef.current = null;
+    }
+    setIsHornFiring(false);
+    if (videoRef.current && isDuckedRef.current) {
+      videoRef.current.volume = volume;
+      isDuckedRef.current = false;
+    }
+  }, [volume]);
+
+  // Stop audition audio
+  const stopAudition = useCallback(() => {
+    if (activeAuditionStopRef.current) {
+      try {
+        activeAuditionStopRef.current();
+      } catch {}
+      activeAuditionStopRef.current = null;
+    }
+    setIsAuditioningHorn(false);
+    setIsHornFiring(false);
+  }, []);
+
+  // When active clip changes, pause and reset
+  useEffect(() => {
+    stopActiveHorn();
+    stopAudition();
+    setIsPlaying(false);
+    setCurrentPlayTime(0);
+    hornTriggeredRef.current = false;
+
+    if (clip) {
+      const dur =
+        Number.isFinite(clip.originalDuration) && clip.originalDuration > 0.1
+          ? clip.originalDuration
+          : 5.0;
+      setMaxDuration(dur);
+      if (videoRef.current) {
+        videoRef.current.currentTime = clip.startTime || 0;
+        videoRef.current.playbackRate = clip.playbackRate || 1;
+        videoRef.current.volume = clip.volume ?? 1;
+      }
+    }
+  }, [activeIndex, clip?.id, stopActiveHorn, stopAudition]);
+
+  // Sync volume & playback rate to video element
+  useEffect(() => {
+    if (videoRef.current && !isDuckedRef.current) {
+      videoRef.current.volume = volume;
+    }
+  }, [volume]);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate]);
+
+  // Playback & Goal Horn Check Loop
   useEffect(() => {
     if (!isPlaying) {
-      lastTimestampRef.current = null;
-      if (activeHornStopRef.current) {
-        activeHornStopRef.current();
-        activeHornStopRef.current = null;
-      }
-      isDuckingAudioRef.current = false;
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
       }
       return;
     }
 
-    const step = (timestamp: number) => {
-      if (lastTimestampRef.current === null) {
-        lastTimestampRef.current = timestamp;
-      }
-      const rawDelta = (timestamp - lastTimestampRef.current) / 1000;
-      const delta = Math.min(rawDelta, 0.1); // Guard against giant delta jumps
-      lastTimestampRef.current = timestamp;
+    const checkPlayback = () => {
+      const video = videoRef.current;
+      if (!video) return;
 
-      let nextTime = currentTimeRef.current + delta;
-      if (nextTime >= totalDuration) {
-        currentTimeRef.current = 0;
-        setIsPlaying(false);
-        lastTimestampRef.current = null;
-        if (activeHornStopRef.current) {
-          activeHornStopRef.current();
-          activeHornStopRef.current = null;
-        }
-        isDuckingAudioRef.current = false;
-        onTimeUpdate(0);
-        renderAtTime(0);
-        playedHornClipIndicesRef.current.clear();
+      const curTime = video.currentTime;
+      const progressInTrim = Math.max(0, (curTime - startTime) / playbackRate);
+      setCurrentPlayTime(progressInTrim);
+
+      // Loop or pause at trim end
+      if (curTime >= endTime - 0.04) {
+        video.currentTime = startTime;
+        setCurrentPlayTime(0);
+        hornTriggeredRef.current = false;
         return;
       }
 
-      currentTimeRef.current = nextTime;
+      // Check horn trigger
+      const shouldTriggerMode =
+        effectiveHornConfig.triggerMode === 'every_clip' || tag === 'GOAL' || useCustomTiming;
 
-      // Check for horn trigger in active clip
-      const hornCfg = overlaySettings.hornConfig || {
-        enabled: overlaySettings.goalHornSound,
-        useCustomHorn: false,
-        triggerMode: 'every_clip' as const,
-        clipOffsetSeconds: 0.5,
-        volume: 1.0,
-        hornDuration: 5.0,
-        skipClipsWithNativeHorn: true,
-        duckVideoAudio: true,
-      };
+      if (isEligibleForHorn && shouldTriggerMode && !hornTriggeredRef.current) {
+        if (curTime >= targetVideoTimestamp) {
+          hornTriggeredRef.current = true;
+          setIsHornFiring(true);
 
-      const hornEnabled = overlaySettings.goalHornSound && (hornCfg.enabled ?? true);
-      if (hornEnabled && !isMuted) {
-        const activeIdx = segments.findIndex(
-          (seg) => nextTime >= seg.clipStartInTimeline && nextTime <= seg.clipEndInTimeline,
-        );
-        if (activeIdx !== -1) {
-          const activeSeg = segments[activeIdx];
-          const activeClip = activeSeg.clip;
+          playHornSound(effectiveHornConfig)
+            .then(({ stop }) => {
+              activeHornStopRef.current = () => {
+                try {
+                  stop();
+                } catch {}
+                setIsHornFiring(false);
+              };
 
-          // Check native horn conflict prevention
-          const hasNative = Boolean(activeClip.hasNativeHorn);
-          const skipBecauseNative = hasNative && (hornCfg.skipClipsWithNativeHorn !== false);
-          const isEligible = !activeClip.hornDisabled && !skipBecauseNative;
+              const durMs =
+                (effectiveHornConfig.hornDuration ??
+                  effectiveHornConfig.customHornDuration ??
+                  5.0) * 1000;
 
-          if (isEligible && !playedHornClipIndicesRef.current.has(activeIdx)) {
-            const isGoal = activeClip.tag === 'GOAL';
-            const shouldTrigger = hornCfg.triggerMode === 'every_clip' || isGoal;
-
-            if (shouldTrigger) {
-              const rawOffset = activeClip.hornTimingOverride ?? hornCfg.clipOffsetSeconds ?? 0.5;
-              const triggerOffset = Math.max(0, rawOffset) / (activeClip.playbackRate || 1.0);
-
-              if (nextTime >= activeSeg.clipStartInTimeline + triggerOffset) {
-                playedHornClipIndicesRef.current.add(activeIdx);
-
-                // Duck native video background audio if enabled
-                if (hornCfg.duckVideoAudio) {
-                  isDuckingAudioRef.current = true;
-                  const dur = hornCfg.hornDuration ?? hornCfg.customHornDuration ?? 5.0;
-                  setTimeout(() => {
-                    isDuckingAudioRef.current = false;
-                  }, dur * 1000);
-                }
-
-                playHornSound(hornCfg).then(({ stop }) => {
-                  activeHornStopRef.current = stop;
-                });
+              if (effectiveHornConfig.duckVideoAudio && videoRef.current) {
+                videoRef.current.volume = volume * 0.15;
+                isDuckedRef.current = true;
+                duckTimeoutRef.current = setTimeout(() => {
+                  setIsHornFiring(false);
+                  if (videoRef.current && isDuckedRef.current) {
+                    videoRef.current.volume = volume;
+                    isDuckedRef.current = false;
+                  }
+                }, durMs);
+              } else {
+                duckTimeoutRef.current = setTimeout(() => {
+                  setIsHornFiring(false);
+                }, durMs);
               }
-            }
-          }
+            })
+            .catch((err) => {
+              setIsHornFiring(false);
+              console.warn('Horn playback error:', err);
+            });
         }
       }
 
-      onTimeUpdate(nextTime);
-      renderAtTime(nextTime);
-      animationFrameRef.current = requestAnimationFrame(step);
+      rafRef.current = requestAnimationFrame(checkPlayback);
     };
 
-    animationFrameRef.current = requestAnimationFrame(step);
+    rafRef.current = requestAnimationFrame(checkPlayback);
 
     return () => {
-      lastTimestampRef.current = null;
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
       }
     };
-  }, [isPlaying, totalDuration, onTimeUpdate, renderAtTime, overlaySettings, segments, isMuted]);
+  }, [
+    isPlaying,
+    startTime,
+    endTime,
+    playbackRate,
+    isEligibleForHorn,
+    targetVideoTimestamp,
+    tag,
+    useCustomTiming,
+    effectiveHornConfig,
+    volume,
+    stopActiveHorn,
+  ]);
 
-  // Initial and seek re-render
-  useEffect(() => {
-    if (!isPlaying) {
-      renderAtTime(currentTime);
+  // Video metadata loaded
+  const handleVideoLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const v = e.currentTarget;
+    let dur = v.duration;
+    if (dur === Infinity) {
+      v.currentTime = 1e10;
+      v.ontimeupdate = () => {
+        v.ontimeupdate = null;
+        dur = v.duration;
+        if (!Number.isFinite(dur)) dur = v.currentTime;
+        v.currentTime = startTime;
+        if (Number.isFinite(dur) && dur > 0.1) {
+          setMaxDuration(dur);
+          if (endTime > dur || endTime <= 0) {
+            updateClipField({ endTime: dur, originalDuration: dur });
+          }
+        }
+      };
+      return;
     }
-  }, [currentTime, isPlaying, renderAtTime]);
+
+    if (Number.isFinite(dur) && dur > 0.1) {
+      setMaxDuration(dur);
+      if (!Number.isFinite(endTime) || endTime > dur || endTime <= 0) {
+        updateClipField({ endTime: dur, originalDuration: dur });
+      }
+    }
+  };
 
   const togglePlay = () => {
-    if (clips.length === 0) return;
-    if (currentTimeRef.current >= totalDuration) {
-      currentTimeRef.current = 0;
-      onTimeUpdate(0);
-      playedHornClipIndicesRef.current.clear();
-    }
-    if (isPlaying && activeHornStopRef.current) {
-      activeHornStopRef.current();
-      activeHornStopRef.current = null;
-    }
-    isDuckingAudioRef.current = false;
-    lastTimestampRef.current = null;
-    setIsPlaying(!isPlaying);
-  };
-
-  const handleRestart = () => {
-    if (activeHornStopRef.current) {
-      activeHornStopRef.current();
-      activeHornStopRef.current = null;
-    }
-    isDuckingAudioRef.current = false;
-    lastTimestampRef.current = null;
-    playedHornClipIndicesRef.current.clear();
-    currentTimeRef.current = 0;
-    onTimeUpdate(0);
-    renderAtTime(0);
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    if (activeHornStopRef.current) {
-      activeHornStopRef.current();
-      activeHornStopRef.current = null;
-    }
-    isDuckingAudioRef.current = false;
-    lastTimestampRef.current = null;
-    playedHornClipIndicesRef.current.clear();
-
-    // Mark clips whose horn trigger timestamp has already elapsed as played
-    segments.forEach((seg, idx) => {
-      const rawOffset =
-        seg.clip.hornTimingOverride ?? overlaySettings.hornConfig?.clipOffsetSeconds ?? 0.5;
-      const triggerOffset = Math.max(0, rawOffset) / (seg.clip.playbackRate || 1.0);
-      if (val > seg.clipStartInTimeline + triggerOffset) {
-        playedHornClipIndicesRef.current.add(idx);
+    const video = videoRef.current;
+    if (!video) return;
+    if (isPlaying) {
+      video.pause();
+      setIsPlaying(false);
+      stopActiveHorn();
+    } else {
+      stopAudition();
+      if (video.currentTime < startTime || video.currentTime >= endTime - 0.05) {
+        video.currentTime = startTime;
+        hornTriggeredRef.current = false;
+        setCurrentPlayTime(0);
+      } else if (video.currentTime < targetVideoTimestamp) {
+        hornTriggeredRef.current = false;
       }
-    });
-
-    currentTimeRef.current = val;
-    onTimeUpdate(val);
-    renderAtTime(val);
-  };
-
-  const formatTime = (secs: number) => {
-    if (!Number.isFinite(secs) || isNaN(secs) || secs < 0) return '0:00.0';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    const ms = Math.floor((secs % 1) * 10);
-    return `${m}:${s < 10 ? '0' : ''}${s}.${ms}`;
-  };
-
-  // Find which clip is active at currentTime (or user selected)
-  const activeClipIndex = React.useMemo(() => {
-    if (clips.length === 0) return -1;
-    if (selectedClipIndex !== null && selectedClipIndex !== undefined && selectedClipIndex >= 0 && selectedClipIndex < clips.length) {
-      return selectedClipIndex;
+      video.play().catch(() => {});
+      setIsPlaying(true);
     }
-    const idx = segments.findIndex(
-      (seg) => currentTime >= seg.clipStartInTimeline && currentTime <= seg.clipEndInTimeline
+  };
+
+  const handleSeekPlayhead = (targetOffsetSeconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const mediaTime = startTime + targetOffsetSeconds * playbackRate;
+    video.currentTime = Math.max(startTime, Math.min(endTime, mediaTime));
+    setCurrentPlayTime(targetOffsetSeconds);
+    if (mediaTime < targetVideoTimestamp) {
+      hornTriggeredRef.current = false;
+    }
+    stopActiveHorn();
+  };
+
+  const handleScrubberClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const targetOffset = ratio * trimmedDuration;
+    handleSeekPlayhead(targetOffset);
+  };
+
+  // Draggable Goal Horn Marker on Scrubber
+  const handleHornScrubberPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    setIsDraggingHornMarker(true);
+    updateClipField({ hornTimingOverride: activeTriggerOffset });
+
+    const scrubber = scrubberRef.current;
+    if (!scrubber) return;
+    const rect = scrubber.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const newOffset = Math.round(ratio * trimmedDuration * 10) / 10;
+    updateClipField({ hornTimingOverride: newOffset });
+    handleSeekPlayhead(newOffset);
+  };
+
+  const handleHornScrubberPointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingHornMarker) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const scrubber = scrubberRef.current;
+    if (!scrubber) return;
+
+    const rect = scrubber.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const newOffset = Math.round(ratio * trimmedDuration * 10) / 10;
+    updateClipField({ hornTimingOverride: newOffset });
+    handleSeekPlayhead(newOffset);
+  };
+
+  const handleHornScrubberPointerUp = (e: React.PointerEvent) => {
+    if (isDraggingHornMarker) {
+      e.stopPropagation();
+      e.preventDefault();
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      setIsDraggingHornMarker(false);
+    }
+  };
+
+  // Draggable Goal Horn Marker on Timeline Bar
+  const handleHornTimelinePointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    setIsDraggingTimelineHorn(true);
+
+    const bar = timelineBarRef.current;
+    if (!bar) return;
+    const rect = bar.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const rawTimestamp = ratio * maxDuration;
+    const newOffset = Math.max(
+      0,
+      Math.min(trimmedDuration, Math.round((rawTimestamp - startTime) * 10) / 10),
     );
-    return idx !== -1 ? idx : 0;
-  }, [clips.length, selectedClipIndex, segments, currentTime]);
-
-  const activeClip = activeClipIndex !== -1 ? clips[activeClipIndex] : null;
-
-  const handleClipZoomChange = (newZoom: number) => {
-    if (!activeClip || activeClipIndex === -1 || !onUpdateClip) return;
-    const clampedZoom = Math.max(1.0, Math.min(3.5, Number(newZoom.toFixed(2))));
-    onUpdateClip(activeClipIndex, {
-      ...activeClip,
-      zoom: clampedZoom,
-    });
-    requestAnimationFrame(() => renderAtTime(currentTime));
+    updateClipField({ hornTimingOverride: newOffset });
+    handleSeekPlayhead(newOffset);
   };
 
-  const handleClipPanChange = (pX: number, pY: number) => {
-    if (!activeClip || activeClipIndex === -1 || !onUpdateClip) return;
-    onUpdateClip(activeClipIndex, {
-      ...activeClip,
-      panX: pX,
-      panY: pY,
-    });
-    requestAnimationFrame(() => renderAtTime(currentTime));
+  const handleHornTimelinePointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingTimelineHorn) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const bar = timelineBarRef.current;
+    if (!bar) return;
+
+    const rect = bar.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const rawTimestamp = ratio * maxDuration;
+    const newOffset = Math.max(
+      0,
+      Math.min(trimmedDuration, Math.round((rawTimestamp - startTime) * 10) / 10),
+    );
+    updateClipField({ hornTimingOverride: newOffset });
+    handleSeekPlayhead(newOffset);
   };
 
-  // Dimensions for canvas
-  const canvasWidth = aspectRatio === '9:16' ? 720 : aspectRatio === '1:1' ? 720 : 1280;
-  const canvasHeight = aspectRatio === '9:16' ? 1280 : aspectRatio === '1:1' ? 720 : 720;
+  const handleHornTimelinePointerUp = (e: React.PointerEvent) => {
+    if (isDraggingTimelineHorn) {
+      e.stopPropagation();
+      e.preventDefault();
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      setIsDraggingTimelineHorn(false);
+    }
+  };
+
+  // Snap Horn to Current Frame
+  const handleSnapHornToCurrent = () => {
+    const offset = Math.round(currentPlayTime * 10) / 10;
+    updateClipField({ hornTimingOverride: offset });
+  };
+
+  // Audition Horn
+  const handleToggleAudition = async () => {
+    if (isAuditioningHorn) {
+      stopAudition();
+    } else {
+      stopActiveHorn();
+      setIsAuditioningHorn(true);
+      setIsHornFiring(true);
+      try {
+        const { stop } = await playHornSound(effectiveHornConfig);
+        activeAuditionStopRef.current = () => {
+          try {
+            stop();
+          } catch {}
+          setIsAuditioningHorn(false);
+          setIsHornFiring(false);
+        };
+        const durMs =
+          (effectiveHornConfig.hornDuration ??
+            effectiveHornConfig.customHornDuration ??
+            5.0) * 1000;
+        setTimeout(() => {
+          if (activeAuditionStopRef.current) {
+            stopAudition();
+          }
+        }, durMs);
+      } catch (err) {
+        setIsAuditioningHorn(false);
+        setIsHornFiring(false);
+      }
+    }
+  };
+
+  // Preview Horn Sync
+  const handlePreviewFromBeforeHorn = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    stopActiveHorn();
+    stopAudition();
+
+    const startOffset = Math.max(0, activeTriggerOffset - 1.5);
+    handleSeekPlayhead(startOffset);
+    video.play().catch(() => {});
+    setIsPlaying(true);
+  };
+
+  // Mouse pan drag for zoomed video
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (zoom <= 1) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    isDraggingRef.current = true;
+    hasDraggedRef.current = false;
+    dragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      startPanX: panX,
+      startPanY: panY,
+    };
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingRef.current) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      hasDraggedRef.current = true;
+    }
+    const sensitivity = 0.5 / zoom;
+    const newPanX = Math.max(
+      -100,
+      Math.min(100, dragStartRef.current.startPanX - dx * sensitivity),
+    );
+    const newPanY = Math.max(
+      -100,
+      Math.min(100, dragStartRef.current.startPanY - dy * sensitivity),
+    );
+    updateClipField({ panX: Math.round(newPanX), panY: Math.round(newPanY) });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+    }
+  };
+
+  const handlePreviewContainerClick = () => {
+    if (hasDraggedRef.current) {
+      hasDraggedRef.current = false;
+      return;
+    }
+    togglePlay();
+  };
+
+  // If no clips exist, show dropzone empty state
+  if (!clip || activeIndex === null || clips.length === 0) {
+    return (
+      <div className="relative w-full h-full flex flex-col items-center justify-center bg-slate-950/80 rounded-2xl border border-slate-800 p-6 text-center select-none overflow-hidden">
+        <div className="w-16 h-16 rounded-2xl bg-red-600/10 border border-red-500/20 flex items-center justify-center mb-4 shadow-inner">
+          <Tv className="w-8 h-8 text-red-500" />
+        </div>
+        <h3 className="font-['Chakra_Petch'] text-lg font-bold text-white uppercase tracking-wider mb-1">
+          No Hockey Clips Loaded
+        </h3>
+        <p className="text-xs text-slate-400 max-w-sm mb-5 leading-relaxed">
+          Import your game highlights or load pre-cut NHL sample clips to edit scores, players,
+          zoom framing, and arena goal horns with zero lag.
+        </p>
+        <div className="flex items-center gap-3 flex-wrap justify-center">
+          <button
+            id="empty-state-upload-btn"
+            type="button"
+            onClick={onOpenUploadDialog}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-lg shadow-red-950/40 transition cursor-pointer uppercase tracking-wider font-['Chakra_Petch']"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add Video Recordings</span>
+          </button>
+          <button
+            id="empty-state-sample-btn"
+            type="button"
+            onClick={onAddSampleClips}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white font-bold text-xs border border-slate-700 transition cursor-pointer font-['Chakra_Petch']"
+          >
+            <Sparkles className="w-4 h-4 text-amber-400" />
+            <span>Load Sample Game Clips</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Calculate container aspect ratio styling
+  const aspectClass =
+    aspectRatio === '9:16'
+      ? 'aspect-[9/16] max-h-[50vh]'
+      : aspectRatio === '1:1'
+      ? 'aspect-square max-h-[50vh]'
+      : 'aspect-video max-h-[50vh]';
 
   return (
-    <div className="flex flex-col items-center justify-between w-full h-full bg-slate-950/90 p-2 sm:p-2.5 rounded-2xl border border-slate-800/80 shadow-2xl relative overflow-hidden min-h-0">
-      {/* Background ice rink subtle ambient glow */}
-      <div className="absolute inset-0 pointer-events-none opacity-20 bg-[radial-gradient(circle_at_50%_40%,#38bdf8_0%,transparent_60%)]"></div>
-
-      {/* Main View Area */}
-      <div className="relative flex items-center justify-center w-full flex-1 min-h-0 overflow-hidden">
-        {clips.length === 0 ? (
-          <div
-            onClick={onOpenUploadDialog}
-            className="group flex flex-col items-center justify-center text-center p-6 sm:p-8 max-w-md w-full border-2 border-dashed border-slate-700 hover:border-red-500 rounded-2xl bg-slate-900/60 hover:bg-slate-900/90 cursor-pointer transition-all duration-200 shadow-2xl my-auto"
-          >
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-red-600/20 to-sky-600/20 border border-red-500/30 group-hover:border-red-500 group-hover:scale-105 text-red-400 flex items-center justify-center mb-3 transition-all shadow-inner">
-              <Plus className="w-7 h-7 text-red-500" />
-            </div>
-            <h3 className="text-xl font-black text-white font-['Chakra_Petch'] tracking-wide mb-1 uppercase">
-              Ready for Your Hockey Videos
-            </h3>
-            <p className="text-xs text-slate-400 mb-4 leading-relaxed max-w-xs">
-              Drag and drop hockey video clips here or click to upload (<span className="text-slate-300 font-mono">MP4, WebM, MOV</span>).
-            </p>
+    <div className="relative w-full h-full flex flex-col bg-slate-950/90 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
+      {/* 1. STUDIO HEADER: Clip Navigator, Timestamp Badge, and Name */}
+      <div className="shrink-0 flex items-center justify-between px-3.5 py-2 border-b border-slate-800 bg-slate-900/80 gap-2 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Previous / Next Clip Navigation */}
+          <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5 shrink-0 shadow-xs">
             <button
-              id="upload-my-videos-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenUploadDialog();
-              }}
-              className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-red-950/60 font-['Chakra_Petch']"
+              id="prev-clip-btn"
+              type="button"
+              disabled={activeIndex <= 0}
+              onClick={() => onSelectClipIndex && onSelectClipIndex(activeIndex - 1)}
+              className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none hover:bg-slate-800 transition"
+              title="Previous Clip"
             >
-              <Plus className="w-4 h-4" />
-              Upload Hockey Videos
+              <ChevronLeft className="w-4 h-4" />
             </button>
-            <p className="text-[10px] text-slate-500 mt-2">
-              Saved automatically in your browser — project stays intact even if refreshed.
-            </p>
-          </div>
-        ) : (
-          <div
-            className={`relative rounded-xl overflow-hidden shadow-2xl border-2 border-slate-800 bg-black flex items-center justify-center max-h-full transition-all ${
-              aspectRatio === '9:16'
-                ? 'aspect-[9/16] h-full max-h-full'
-                : aspectRatio === '16:9'
-                ? 'aspect-[16/9] w-full max-h-full'
-                : 'aspect-square h-full max-h-full'
-            }`}
-          >
-            <canvas
-              ref={canvasRef}
-              width={canvasWidth}
-              height={canvasHeight}
-              className="w-full h-full object-contain cursor-pointer"
-              onClick={togglePlay}
-            />
-
-            {/* Quick Play overlay icon when paused */}
-            {!isPlaying && (
-              <button
-                id="canvas-play-overlay-btn"
-                onClick={togglePlay}
-                className="absolute inset-0 m-auto w-14 h-14 rounded-full bg-black/60 hover:bg-black/80 text-white border border-white/20 flex items-center justify-center transition backdrop-blur-xs scale-100 hover:scale-110"
-              >
-                <Play className="w-6 h-6 ml-0.5 text-red-500 fill-red-500" />
-              </button>
-            )}
-
-            {/* Top aspect ratio indicator pill */}
-            <div className="absolute top-2 right-2 bg-black/70 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-semibold text-slate-300 border border-white/10 tracking-wider">
-              {aspectRatio === '9:16' ? '9:16 SHORTS' : aspectRatio === '16:9' ? '16:9 HD' : '1:1'}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Playback Controls & Timeline Scrubber */}
-      {clips.length > 0 && (
-        <div className="w-full max-w-2xl mt-1 bg-slate-900/90 border border-slate-800/80 rounded-xl px-2.5 py-1 flex flex-col gap-1 shrink-0">
-          {/* Scrubber track */}
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-mono font-bold text-sky-400 min-w-[48px]">
-              {formatTime(currentTime)}
+            <span className="px-2 text-[11px] font-bold font-['Chakra_Petch'] text-slate-300 select-none">
+              {activeIndex + 1} / {clips.length}
             </span>
+            <button
+              id="next-clip-btn"
+              type="button"
+              disabled={activeIndex >= clips.length - 1}
+              onClick={() => onSelectClipIndex && onSelectClipIndex(activeIndex + 1)}
+              className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none hover:bg-slate-800 transition"
+              title="Next Clip"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Sequence badge */}
+          <span className="bg-red-600 text-white font-mono font-black text-[10px] px-1.5 py-0.5 rounded shrink-0 shadow-xs">
+            #{activeIndex + 1}
+          </span>
+
+          {/* Recorded Timestamp Badge */}
+          {clip.recordedAtDisplay && (
+            <span
+              className="hidden md:flex items-center gap-1 text-[11px] font-mono text-amber-300 bg-amber-950/60 border border-amber-800/60 px-2 py-0.5 rounded shrink-0"
+              title={`Detected from filename: ${clip.name}`}
+            >
+              <Clock className="w-3 h-3 text-amber-400 shrink-0" />
+              <span className="truncate">{clip.recordedAtDisplay}</span>
+            </span>
+          )}
+
+          {/* Editable Clip Name */}
+          <div className="flex items-center min-w-0 max-w-[200px] sm:max-w-xs">
             <input
-              id="timeline-scrubber-slider"
-              type="range"
-              min={0}
-              max={Number.isFinite(totalDuration) && totalDuration > 0.1 ? totalDuration : 1}
-              step={0.05}
-              value={Number.isFinite(currentTime) ? currentTime : 0}
-              onChange={handleSeek}
-              className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
+              type="text"
+              value={clip.name}
+              onChange={(e) => updateClipField({ name: e.target.value })}
+              className="bg-transparent text-white font-semibold text-xs px-1 py-0.5 rounded hover:bg-slate-800/50 focus:bg-slate-900 focus:border focus:border-slate-700 focus:outline-none truncate w-full"
+              title="Click to edit clip name"
             />
-            <span className="text-[11px] font-mono text-slate-400 min-w-[48px] text-right">
-              {formatTime(totalDuration)}
-            </span>
-          </div>
-
-          {/* Buttons row */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
-              <button
-                id="player-restart-btn"
-                onClick={handleRestart}
-                title="Restart playback"
-                className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                id="player-play-btn"
-                onClick={togglePlay}
-                className="flex items-center justify-center w-7 h-7 rounded-lg bg-red-600 hover:bg-red-500 text-white transition shadow shadow-red-950/40"
-              >
-                {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
-              </button>
-
-              <button
-                id="player-mute-btn"
-                onClick={() => setIsMuted(!isMuted)}
-                title={isMuted ? 'Unmute' : 'Mute'}
-                className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition"
-              >
-                {isMuted ? (
-                  <VolumeX className="w-3.5 h-3.5 text-red-400" />
-                ) : (
-                  <Volume2 className="w-3.5 h-3.5" />
-                )}
-              </button>
-            </div>
-
-            <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-medium">
-              <span className="bg-slate-800/80 px-1.5 py-0.5 rounded border border-slate-700/60">
-                {clips.length} {clips.length === 1 ? 'Clip' : 'Clips'}
-              </span>
-              <span className="bg-slate-800/80 px-1.5 py-0.5 rounded border border-slate-700/60">
-                {transitions.length} {transitions.length === 1 ? 'Trans' : 'Trans'}
-              </span>
-            </div>
           </div>
         </div>
-      )}
 
-      {/* Zoom Feature Directly Below Video */}
-      {clips.length > 0 && activeClip && onUpdateClip && (
-        <div className="w-full max-w-2xl mt-1 bg-slate-900/95 border border-slate-800/90 rounded-lg px-2.5 py-1 flex flex-col gap-1 shrink-0 shadow-md shadow-black/40">
-          <div className="flex items-center justify-between gap-1 text-xs">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <ZoomIn className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="text-[10px] font-bold text-white uppercase tracking-wider font-['Chakra_Petch'] shrink-0">
-                Zoom &amp; Framing
-              </span>
-              <span
-                className="text-[10px] font-mono text-slate-300 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 truncate max-w-[110px]"
-                title={activeClip.name}
-              >
-                {activeClip.name}
-              </span>
-              <span
-                className={`text-[9px] px-1.5 py-0.5 rounded font-bold border shrink-0 ${
-                  (activeClip.zoom ?? 1) > 1.02
-                    ? 'bg-amber-950/90 text-amber-300 border-amber-700/80'
-                    : 'bg-slate-950 text-slate-400 border-slate-800'
-                }`}
-              >
-                {(activeClip.zoom ?? 1) > 1.02
-                  ? `${(activeClip.zoom ?? 1).toFixed(2)}x`
-                  : '1.0x Full'}
-              </span>
-            </div>
+        {/* Header Right: Overlay Toggle, Aspect Ratio Badge, Delete */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowOverlaysPreview(!showOverlaysPreview)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition shadow cursor-pointer ${
+              showOverlaysPreview
+                ? 'bg-sky-950/80 border-sky-500/60 text-sky-300'
+                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+            }`}
+            title="Toggle Hockey Scorebug, Player Lower Third, and Highlight Tag"
+          >
+            {showOverlaysPreview ? (
+              <Eye className="w-3.5 h-3.5 text-sky-400" />
+            ) : (
+              <EyeOff className="w-3.5 h-3.5 text-slate-500" />
+            )}
+            <span className="hidden sm:inline">Overlays</span>
+          </button>
 
-            <div className="flex items-center gap-1 shrink-0">
-              {((activeClip.zoom ?? 1) > 1.02 ||
-                (activeClip.panX ?? 0) !== 0 ||
-                (activeClip.panY ?? 0) !== 0) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleClipZoomChange(1.0);
-                    handleClipPanChange(0, 0);
-                  }}
-                  className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-white bg-slate-950 hover:bg-slate-800 px-1.5 py-0.5 rounded border border-slate-800 transition"
-                >
-                  <RotateCcw className="w-2.5 h-2.5" />
-                  Reset
-                </button>
+          <span className="bg-slate-950 border border-slate-800 text-slate-400 font-mono text-[10px] px-2 py-1 rounded-lg font-bold">
+            {aspectRatio}
+          </span>
+
+          {onRemoveClip && (
+            <button
+              type="button"
+              onClick={() => onRemoveClip(activeIndex)}
+              className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-850 transition"
+              title="Delete this clip"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 2. VIDEO STAGE: Native Hardware Accelerated Video Player & Live WYSIWYG Overlays */}
+      <div className="flex-1 min-h-0 relative flex items-center justify-center bg-black p-2 overflow-hidden select-none">
+        <div
+          className={`relative rounded-xl overflow-hidden bg-slate-950 ${aspectClass} w-full flex items-center justify-center border border-slate-850 shadow-2xl select-none ${
+            zoom > 1.02 ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+          }`}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onClick={handlePreviewContainerClick}
+        >
+          {/* Hardware-accelerated Video Element with CSS Zoom/Pan transform */}
+          <div
+            className="w-full h-full flex items-center justify-center transition-transform duration-75 ease-out will-change-transform"
+            style={{
+              transform: `scale(${zoom}) translate(${-panX * 0.35}%, ${-panY * 0.35}%)`,
+              transformOrigin: 'center center',
+            }}
+          >
+            <video
+              ref={videoRef}
+              src={clip.url}
+              playsInline
+              onLoadedMetadata={handleVideoLoadedMetadata}
+              className="w-full h-full object-contain pointer-events-none"
+            />
+          </div>
+
+          {/* LIVE BROADCAST OVERLAYS (WYSIWYG) */}
+          {showOverlaysPreview && (
+            <>
+              {/* Scorebug - Top Left */}
+              {effectiveScorebug.enabled && (
+                <div className="absolute top-2.5 left-2.5 z-20 pointer-events-none bg-slate-950/92 backdrop-blur-md border border-sky-400/50 rounded-lg px-2.5 py-1 shadow-2xl flex items-center gap-2 text-xs font-['Chakra_Petch'] select-none animate-in fade-in duration-100">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-black text-white tracking-wider text-[11px] max-w-[65px] truncate">
+                      {effectiveScorebug.awayTeam || 'AWAY'}
+                    </span>
+                    <span className="bg-sky-500/25 text-sky-300 font-black px-1.5 py-0.5 rounded text-[11px] border border-sky-400/40 min-w-[20px] text-center shadow-xs">
+                      {effectiveScorebug.awayScore ?? 0}
+                    </span>
+                  </div>
+
+                  <span className="text-slate-600 font-bold">|</span>
+
+                  <div className="flex items-center gap-1.5">
+                    <span className="bg-sky-500/25 text-sky-300 font-black px-1.5 py-0.5 rounded text-[11px] border border-sky-400/40 min-w-[20px] text-center shadow-xs">
+                      {effectiveScorebug.homeScore ?? 0}
+                    </span>
+                    <span className="font-black text-white tracking-wider text-[11px] max-w-[65px] truncate">
+                      {effectiveScorebug.homeTeam || 'HOME'}
+                    </span>
+                  </div>
+
+                  <div className="border-l border-slate-700/80 pl-2 flex items-center gap-1.5 text-[10px]">
+                    <span className="font-black text-amber-400">
+                      {effectiveScorebug.period || '1ST'}
+                    </span>
+                    <span className="font-mono text-slate-200">
+                      {effectiveScorebug.timeRemaining || '0:18'}
+                    </span>
+                  </div>
+                </div>
               )}
-            </div>
-          </div>
 
-          {/* Slider & Presets Row */}
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5 flex-1">
-              <button
-                type="button"
-                title="Zoom Out (-0.2x)"
-                onClick={() =>
-                  handleClipZoomChange(Math.max(1.0, (activeClip.zoom ?? 1) - 0.2))
-                }
-                className="p-1 rounded bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 transition"
-              >
-                <ZoomOut className="w-3 h-3" />
-              </button>
-              <input
-                type="range"
-                min={1.0}
-                max={3.5}
-                step={0.05}
-                value={activeClip.zoom ?? 1.0}
-                onChange={(e) => handleClipZoomChange(parseFloat(e.target.value) || 1.0)}
-                className="flex-1 h-1.5 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-amber-500"
-              />
-              <button
-                type="button"
-                title="Zoom In (+0.2x)"
-                onClick={() =>
-                  handleClipZoomChange(Math.min(3.5, (activeClip.zoom ?? 1) + 0.2))
-                }
-                className="p-1 rounded bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 transition"
-              >
-                <ZoomIn className="w-3 h-3" />
-              </button>
-              <span className="font-mono text-[11px] text-amber-400 font-bold bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 min-w-[42px] text-center">
-                {(activeClip.zoom ?? 1.0).toFixed(2)}x
-              </span>
-            </div>
-
-            {/* Quick Magnification Presets */}
-            <div className="hidden sm:flex items-center gap-1 shrink-0">
-              {[
-                { label: '1.0x', val: 1.0 },
-                { label: '1.25x', val: 1.25 },
-                { label: '1.5x', val: 1.5 },
-                { label: '2.0x', val: 2.0 },
-              ].map((p) => (
-                <button
-                  key={p.val}
-                  type="button"
-                  onClick={() => handleClipZoomChange(p.val)}
-                  className={`text-[10px] px-1.5 py-0.5 rounded font-mono border transition ${
-                    Math.abs((activeClip.zoom ?? 1) - p.val) < 0.04
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Quick Framing / Pan buttons when zoomed */}
-          {(activeClip.zoom ?? 1) > 1.02 && (
-            <div className="pt-1 border-t border-slate-800/80 flex items-center justify-between gap-1 text-[10px]">
-              <div className="flex items-center gap-1 text-slate-400">
-                <Crosshair className="w-3 h-3 text-sky-400" />
-                <span>Focus:</span>
-                <span className="font-mono text-sky-400 font-bold">
-                  {activeClip.panX ?? 0 > 0 ? `+${activeClip.panX}` : activeClip.panX ?? 0}%X,{' '}
-                  {activeClip.panY ?? 0 > 0 ? `+${activeClip.panY}` : activeClip.panY ?? 0}%Y
-                </span>
-              </div>
-              <div className="flex items-center gap-1">
-                {[
-                  { label: 'Left', x: -60, y: 0 },
-                  { label: 'Boards', x: 0, y: -50 },
-                  { label: 'Center', x: 0, y: 0 },
-                  { label: 'Net', x: 0, y: 55 },
-                  { label: 'Right', x: 60, y: 0 },
-                ].map((f) => (
-                  <button
-                    key={f.label}
-                    type="button"
-                    onClick={() => handleClipPanChange(f.x, f.y)}
-                    className={`text-[9px] px-1.5 py-0.5 rounded border transition ${
-                      (activeClip.panX ?? 0) === f.x && (activeClip.panY ?? 0) === f.y
-                        ? 'bg-sky-500/20 border-sky-500 text-sky-300 font-bold'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+              {/* Highlight Action Tag - Top Right */}
+              {(effectiveTag || effectiveTagText) && (
+                <div className="absolute top-2.5 right-2.5 z-20 pointer-events-none select-none flex flex-col items-end gap-1 animate-in fade-in duration-100">
+                  <span
+                    className={`inline-flex items-center gap-1 text-[11px] font-black italic tracking-wider px-2.5 py-1 rounded-md shadow-2xl border ${
+                      effectiveTag === 'GOAL'
+                        ? 'bg-red-600 text-white border-red-400 shadow-red-950/80 animate-pulse'
+                        : effectiveTag === 'SAVE'
+                        ? 'bg-sky-600 text-white border-sky-400 shadow-sky-950/80'
+                        : effectiveTag === 'HIT'
+                        ? 'bg-orange-600 text-white border-orange-400 shadow-orange-950/80'
+                        : 'bg-amber-600 text-white border-amber-400 shadow-amber-950/80'
                     }`}
                   >
-                    {f.label}
-                  </button>
-                ))}
+                    <span>
+                      {effectiveTag === 'GOAL'
+                        ? '🚨'
+                        : effectiveTag === 'SAVE'
+                        ? '🧤'
+                        : effectiveTag === 'HIT'
+                        ? '💥'
+                        : '⚡'}
+                    </span>
+                    <span>{effectiveTagText || effectiveTag}</span>
+                  </span>
+
+                  {isEligibleForHorn && (
+                    <div className="bg-slate-950/90 backdrop-blur-xs border border-amber-500/60 text-amber-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded shadow flex items-center gap-1">
+                      <Volume2 className="w-3 h-3 text-amber-400 animate-pulse" />
+                      <span>Horn: {activeTriggerOffset.toFixed(1)}s</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Horn Marker if no tag is selected */}
+              {!effectiveTag && !effectiveTagText && isEligibleForHorn && (
+                <div className="absolute top-2.5 right-2.5 z-20 pointer-events-none select-none animate-in fade-in duration-100">
+                  <div className="bg-slate-950/90 backdrop-blur-xs border border-amber-500/60 text-amber-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded shadow flex items-center gap-1">
+                    <Volume2 className="w-3 h-3 text-amber-400 animate-pulse" />
+                    <span>Horn: {activeTriggerOffset.toFixed(1)}s</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Player Lower Third - Bottom Left */}
+              {effectivePlayerBanner.enabled && (
+                <div className="absolute bottom-2.5 left-2.5 z-20 pointer-events-none bg-slate-950/92 backdrop-blur-md border border-sky-500/40 rounded-lg p-1.5 shadow-2xl flex items-center gap-2 max-w-[75%] select-none animate-in fade-in duration-100">
+                  <div className="w-7 h-7 bg-red-600 rounded flex items-center justify-center font-['Chakra_Petch'] font-black text-white text-xs shadow-md shrink-0 border border-red-400/40">
+                    {effectivePlayerBanner.jerseyNumber
+                      ? `#${effectivePlayerBanner.jerseyNumber.replace('#', '')}`
+                      : '#'}
+                  </div>
+                  <div className="min-w-0 pr-1">
+                    <div className="font-bold text-white text-xs leading-tight truncate font-['Chakra_Petch']">
+                      {effectivePlayerBanner.playerName || 'Player Name'}
+                    </div>
+                    <div className="text-[10px] text-sky-400 font-medium truncate">
+                      {effectivePlayerBanner.actionText || 'Highlight Play'}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Goal Siren Firing Alert */}
+          {isHornFiring && (
+            <div className="absolute inset-0 pointer-events-none z-30 flex items-center justify-center bg-red-600/20 border-4 border-red-500/90 rounded-xl animate-pulse">
+              <div className="bg-slate-950/95 border-2 border-amber-400 text-amber-300 font-['Chakra_Petch'] font-black px-4 py-2 rounded-xl shadow-2xl flex items-center gap-2.5 text-sm tracking-wider uppercase shadow-amber-500/50">
+                <span className="text-xl animate-bounce">🚨</span>
+                <span className="text-white font-extrabold">GOAL HORN SOUNDING!</span>
+                <span className="text-xl animate-bounce">🚨</span>
               </div>
             </div>
           )}
+
+          {/* Zoom Overlay Badges & Full Rink Radar */}
+          {zoom > 1.02 && (
+            <>
+              <div className="absolute top-10 left-2.5 bg-black/80 backdrop-blur-xs border border-amber-500/50 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1.5 pointer-events-none shadow z-10">
+                <ZoomIn className="w-3 h-3 text-amber-400" />
+                <span>{zoom.toFixed(2)}x Zoom</span>
+                <span className="text-slate-500">|</span>
+                <span className="text-slate-300 font-mono">
+                  X: {panX > 0 ? `+${panX}` : panX}% Y: {panY > 0 ? `+${panY}` : panY}%
+                </span>
+              </div>
+
+              {/* Rink Radar / Minimap */}
+              <div
+                className="absolute bottom-2.5 right-2.5 bg-slate-950/95 border border-amber-500/60 rounded-md overflow-hidden p-0.5 shadow-2xl z-20 backdrop-blur-md cursor-crosshair"
+                title="Full Ice Radar: Click anywhere to snap zoom framing"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const clickX = (e.clientX - rect.left) / rect.width;
+                  const clickY = (e.clientY - rect.top) / rect.height;
+                  const pX = Math.round((clickX - 0.5) * 200);
+                  const pY = Math.round((clickY - 0.5) * 200);
+                  updateClipField({
+                    panX: Math.max(-100, Math.min(100, pX)),
+                    panY: Math.max(-100, Math.min(100, pY)),
+                  });
+                }}
+              >
+                <div className="relative w-24 h-14 bg-slate-900 rounded overflow-hidden flex items-center justify-center">
+                  <video
+                    src={clip.url}
+                    className="w-full h-full object-cover opacity-50 pointer-events-none"
+                    muted
+                    playsInline
+                  />
+                  {(() => {
+                    const boxW = Math.max(15, Math.min(100, 100 / zoom));
+                    const boxH = Math.max(15, Math.min(100, 100 / zoom));
+                    const maxOffsetX = (100 - boxW) / 2;
+                    const maxOffsetY = (100 - boxH) / 2;
+                    const left = 50 - boxW / 2 + (panX / 100) * maxOffsetX;
+                    const top = 50 - boxH / 2 + (panY / 100) * maxOffsetY;
+                    return (
+                      <div
+                        className="absolute border-2 border-amber-400 bg-amber-400/30 rounded-xs pointer-events-none shadow-sm shadow-black"
+                        style={{
+                          left: `${left}%`,
+                          top: `${top}%`,
+                          width: `${boxW}%`,
+                          height: `${boxH}%`,
+                        }}
+                      >
+                        <div className="w-1.5 h-1.5 bg-amber-400 rounded-full absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 ring-1 ring-black" />
+                      </div>
+                    );
+                  })()}
+                  <span className="absolute bottom-0.5 left-1 text-[7px] font-mono text-amber-300 font-bold bg-black/80 px-1 rounded border border-amber-500/30">
+                    Radar
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Center Play/Pause button on video hover/click */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePlay();
+            }}
+            className="absolute inset-0 m-auto w-12 h-12 rounded-full bg-black/60 text-white flex items-center justify-center hover:scale-110 transition z-10 shadow-lg cursor-pointer"
+          >
+            {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+          </button>
         </div>
-      )}
+      </div>
+
+      {/* 3. SCRUBBER TRACK WITH DRAGGABLE 🚨 GOAL HORN PIN & TRANSPORT BAR */}
+      <div className="shrink-0 bg-slate-900/90 border-t border-slate-800 p-2.5 sm:p-3 space-y-2">
+        {/* Scrubber Bar Track */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[11px] font-mono">
+            <span className="text-white font-bold">
+              {currentPlayTime.toFixed(1)}s / {trimmedDuration.toFixed(1)}s
+            </span>
+            <div className="flex items-center gap-2">
+              {isEligibleForHorn && (
+                <span className="text-amber-400 font-bold flex items-center gap-1">
+                  <span>🚨 Horn Trigger:</span>
+                  <span className="bg-amber-950/80 px-1.5 py-0.2 rounded border border-amber-800/60">
+                    {activeTriggerOffset.toFixed(1)}s
+                  </span>
+                </span>
+              )}
+              <span className="text-slate-400 text-[10px]">
+                Trim: {startTime.toFixed(1)}s – {endTime.toFixed(1)}s
+              </span>
+            </div>
+          </div>
+
+          {/* Interactive Scrubber with Draggable Horn Marker */}
+          <div
+            ref={scrubberRef}
+            onClick={handleScrubberClick}
+            className="relative w-full h-4 bg-slate-950 rounded-full cursor-pointer flex items-center border border-slate-800 select-none group"
+            title="Click or drag to scrub playhead. Drag the 🚨 pin to reposition goal horn!"
+          >
+            {/* Played Progress Bar */}
+            <div
+              className="h-full bg-red-600 rounded-full transition-all pointer-events-none"
+              style={{
+                width: `${Math.min(100, (currentPlayTime / trimmedDuration) * 100)}%`,
+              }}
+            />
+
+            {/* Current Playhead Handle */}
+            <div
+              className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow border-2 border-red-600 pointer-events-none"
+              style={{
+                left: `calc(${Math.min(100, (currentPlayTime / trimmedDuration) * 100)}% - 6px)`,
+              }}
+            />
+
+            {/* DRAGGABLE GOAL HORN PIN */}
+            {isEligibleForHorn && (
+              <div
+                onPointerDown={handleHornScrubberPointerDown}
+                onPointerMove={handleHornScrubberPointerMove}
+                onPointerUp={handleHornScrubberPointerUp}
+                className="absolute top-1/2 -translate-y-1/2 z-30 cursor-grab active:cursor-grabbing hover:scale-125 transition-transform select-none"
+                style={{
+                  left: `calc(${Math.min(
+                    100,
+                    Math.max(0, (activeTriggerOffset / trimmedDuration) * 100),
+                  )}% - 10px)`,
+                }}
+                title={`Draggable Goal Horn Pin: fires at ${activeTriggerOffset.toFixed(
+                  1,
+                )}s. Drag anywhere along clip!`}
+              >
+                <div className="w-5 h-5 rounded-full bg-amber-400 border-2 border-black shadow-lg shadow-amber-500/50 flex items-center justify-center text-[10px]">
+                  🚨
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Transport Controls Row */}
+        <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
+          {/* Play / Pause / Replay */}
+          <div className="flex items-center gap-1.5">
+            <button
+              id="player-toggle-play-btn"
+              type="button"
+              onClick={togglePlay}
+              className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold transition flex items-center gap-1.5 shadow-md shadow-red-950/40 cursor-pointer uppercase font-['Chakra_Petch']"
+            >
+              {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+              <span>{isPlaying ? 'Pause' : 'Play'}</span>
+            </button>
+
+            <button
+              id="player-replay-btn"
+              type="button"
+              onClick={() => handleSeekPlayhead(0)}
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white transition"
+              title="Replay from clip start"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Quick Horn Actions: Snap Horn to Frame & Preview Sync */}
+          {isEligibleForHorn && (
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleSnapHornToCurrent}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-amber-300 text-[11px] font-bold border border-slate-700 transition"
+                title="Places the goal horn at the current video frame"
+              >
+                <Crosshair className="w-3 h-3 text-amber-400" />
+                <span>Snap Horn Here</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePreviewFromBeforeHorn}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-bold transition shadow"
+                title="Rewinds 1.5s before horn fires and plays"
+              >
+                <Play className="w-3 h-3 fill-current" />
+                <span>Preview Sync</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleToggleAudition}
+                className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-bold border transition ${
+                  isAuditioningHorn
+                    ? 'bg-red-600 text-white border-red-500 animate-pulse'
+                    : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border-slate-700'
+                }`}
+                title="Test arena horn sound now"
+              >
+                <Volume2 className="w-3 h-3 text-amber-400" />
+                <span>{isAuditioningHorn ? 'Stop' : 'Audition'}</span>
+              </button>
+            </div>
+          )}
+
+          {/* Playback Rate & Volume */}
+          <div className="flex items-center gap-2">
+            {/* Speed buttons */}
+            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5">
+              {[0.5, 0.75, 1.0, 1.5].map((rate) => (
+                <button
+                  key={rate}
+                  type="button"
+                  onClick={() => updateClipField({ playbackRate: rate })}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition ${
+                    playbackRate === rate
+                      ? 'bg-red-600 text-white font-bold'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {rate}x
+                </button>
+              ))}
+            </div>
+
+            {/* Volume slider */}
+            <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1">
+              <button
+                type="button"
+                onClick={() => updateClipField({ volume: volume === 0 ? 1 : 0 })}
+                className="text-slate-400 hover:text-white"
+              >
+                {volume === 0 ? (
+                  <VolumeX className="w-3.5 h-3.5 text-red-400" />
+                ) : (
+                  <Volume2 className="w-3.5 h-3.5 text-slate-300" />
+                )}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={volume}
+                onChange={(e) => updateClipField({ volume: parseFloat(e.target.value) || 0 })}
+                className="w-14 h-1 bg-slate-800 rounded appearance-none cursor-pointer accent-red-500"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* 4. MULTI-TRACK TIMELINE & TRIMMING RANGE CONTROLS */}
+        <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-850 space-y-2">
+          <div className="flex items-center justify-between text-[11px]">
+            <div className="flex items-center gap-1.5 text-slate-300 font-bold uppercase font-['Chakra_Petch']">
+              <Scissors className="w-3.5 h-3.5 text-red-400" />
+              <span>Trim Range (Source: {maxDuration.toFixed(1)}s)</span>
+            </div>
+            <div className="text-[11px] font-mono text-sky-400 font-bold">
+              Duration: {trimmedDuration.toFixed(1)}s
+            </div>
+          </div>
+
+          {/* Visual Multi-Track Bar showing full video, trim range, and horn placement */}
+          <div
+            ref={timelineBarRef}
+            className="relative w-full h-5 bg-slate-900 rounded-lg overflow-hidden border border-slate-800 select-none cursor-pointer"
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+              const rawTimestamp = ratio * maxDuration;
+              const targetOffset = Math.max(
+                0,
+                Math.min(trimmedDuration, (rawTimestamp - startTime) / playbackRate),
+              );
+              handleSeekPlayhead(targetOffset);
+            }}
+          >
+            {/* Highlighted Trim Region */}
+            <div
+              className="absolute top-0 bottom-0 bg-sky-500/25 border-x-2 border-sky-400 rounded-xs pointer-events-none"
+              style={{
+                left: `${(startTime / maxDuration) * 100}%`,
+                width: `${Math.max(2, ((endTime - startTime) / maxDuration) * 100)}%`,
+              }}
+            />
+
+            {/* Playhead in source timeline */}
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-white shadow-sm pointer-events-none"
+              style={{
+                left: `${((startTime + currentPlayTime * playbackRate) / maxDuration) * 100}%`,
+              }}
+            />
+
+            {/* Goal Horn Marker on Source Timeline */}
+            {isEligibleForHorn && (
+              <div
+                onPointerDown={handleHornTimelinePointerDown}
+                onPointerMove={handleHornTimelinePointerMove}
+                onPointerUp={handleHornTimelinePointerUp}
+                className="absolute top-0 bottom-0 w-3 -ml-1.5 z-20 cursor-grab active:cursor-grabbing flex items-center justify-center group/hornPin"
+                style={{
+                  left: `${(targetVideoTimestamp / maxDuration) * 100}%`,
+                }}
+                title={`Horn position: ${activeTriggerOffset.toFixed(1)}s into clip`}
+              >
+                <div className="w-2.5 h-2.5 rounded-full bg-amber-400 ring-2 ring-black" />
+              </div>
+            )}
+          </div>
+
+          {/* Sliders for Start Time & End Time */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            {/* Start Time Slider */}
+            <div className="flex items-center gap-2 bg-slate-900/60 p-1.5 rounded-lg border border-slate-800">
+              <span className="text-[10px] font-bold text-slate-400 uppercase font-['Chakra_Petch'] shrink-0">
+                Start
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  updateClipField({
+                    startTime: Math.max(0, Math.round((startTime - 0.1) * 10) / 10),
+                  })
+                }
+                className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]"
+              >
+                -0.1
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0.1, endTime - 0.1)}
+                step={0.1}
+                value={startTime}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value) || 0;
+                  updateClipField({ startTime: val });
+                  if (videoRef.current) {
+                    videoRef.current.currentTime = val;
+                    setCurrentPlayTime(0);
+                  }
+                }}
+                className="flex-1 h-1 bg-slate-800 rounded appearance-none cursor-pointer accent-sky-400"
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  updateClipField({
+                    startTime: Math.min(endTime - 0.1, Math.round((startTime + 0.1) * 10) / 10),
+                  })
+                }
+                className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]"
+              >
+                +0.1
+              </button>
+              <span className="font-mono text-sky-400 font-bold text-[10px] w-8 text-right">
+                {startTime.toFixed(1)}s
+              </span>
+            </div>
+
+            {/* End Time Slider */}
+            <div className="flex items-center gap-2 bg-slate-900/60 p-1.5 rounded-lg border border-slate-800">
+              <span className="text-[10px] font-bold text-slate-400 uppercase font-['Chakra_Petch'] shrink-0">
+                End
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  updateClipField({
+                    endTime: Math.max(startTime + 0.1, Math.round((endTime - 0.1) * 10) / 10),
+                  })
+                }
+                className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]"
+              >
+                -0.1
+              </button>
+              <input
+                type="range"
+                min={startTime + 0.1}
+                max={maxDuration}
+                step={0.1}
+                value={endTime}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value) || maxDuration;
+                  updateClipField({ endTime: val });
+                }}
+                className="flex-1 h-1 bg-slate-800 rounded appearance-none cursor-pointer accent-sky-400"
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  updateClipField({
+                    endTime: Math.min(maxDuration, Math.round((endTime + 0.1) * 10) / 10),
+                  })
+                }
+                className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[10px]"
+              >
+                +0.1
+              </button>
+              <span className="font-mono text-sky-400 font-bold text-[10px] w-8 text-right">
+                {endTime.toFixed(1)}s
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* 5. QUICK ZOOM & FRAMING PRESETS BAR */}
+        <div className="flex items-center justify-between gap-2 flex-wrap text-xs bg-slate-950/60 p-2 rounded-lg border border-slate-850">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-bold text-slate-400 uppercase font-['Chakra_Petch'] flex items-center gap-1">
+              <ZoomIn className="w-3 h-3 text-amber-400" />
+              Zoom:
+            </span>
+            {[
+              { label: '1.0x Full Ice', val: 1.0 },
+              { label: '1.25x Wide', val: 1.25 },
+              { label: '1.5x Action', val: 1.5 },
+              { label: '1.8x Close', val: 1.8 },
+              { label: '2.0x Tight', val: 2.0 },
+            ].map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                onClick={() => updateClipField({ zoom: preset.val })}
+                className={`px-2 py-0.5 rounded text-[10px] font-semibold transition cursor-pointer ${
+                  Math.abs(zoom - preset.val) < 0.05
+                    ? 'bg-amber-500 text-slate-950 font-bold shadow'
+                    : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-800'
+                }`}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+
+          {zoom > 1.02 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-slate-500">Pan Focus:</span>
+              {[
+                { label: 'Left', x: -50, y: 0 },
+                { label: 'Center', x: 0, y: 0 },
+                { label: 'Right', x: 50, y: 0 },
+                { label: 'Net', x: 0, y: 40 },
+              ].map((pan) => (
+                <button
+                  key={pan.label}
+                  type="button"
+                  onClick={() => updateClipField({ panX: pan.x, panY: pan.y })}
+                  className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] text-slate-300 font-medium cursor-pointer"
+                >
+                  {pan.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => updateClipField({ zoom: 1.0, panX: 0, panY: 0 })}
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-[10px] transition cursor-pointer"
+              >
+                Reset
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

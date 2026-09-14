@@ -9,7 +9,6 @@ import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
 import { Timeline } from './components/Timeline';
 import { OverlayControls } from './components/OverlayControls';
-import { ClipEditorModal } from './components/ClipEditorModal';
 import { ExportModal } from './components/ExportModal';
 import { YouTubeUploadModal } from './components/YouTubeUploadModal';
 import { YouTubeAuthModal } from './components/YouTubeAuthModal';
@@ -62,9 +61,19 @@ export default function App() {
     showStamps: true,
   });
 
-  // Modals & Clip Selection
+  // Active Clip Selection for Instant Main-Stage Editing
   const [selectedClipIndex, setSelectedClipIndex] = useState<number | null>(null);
-  const [isClipEditorOpen, setIsClipEditorOpen] = useState(false);
+
+  // Auto-select first clip if none is selected
+  useEffect(() => {
+    if (clips.length > 0) {
+      if (selectedClipIndex === null || selectedClipIndex >= clips.length) {
+        setSelectedClipIndex(0);
+      }
+    } else {
+      setSelectedClipIndex(null);
+    }
+  }, [clips.length, selectedClipIndex]);
 
   // Export State
   const [isExporting, setIsExporting] = useState(false);
@@ -307,6 +316,17 @@ export default function App() {
       });
       return next;
     });
+
+    setSelectedClipIndex((prev) => {
+      if (prev === null) return null;
+      if (prev === index) {
+        return clips.length > 1 ? Math.max(0, index - 1) : null;
+      }
+      if (prev > index) {
+        return prev - 1;
+      }
+      return prev;
+    });
   };
 
   const handleMoveClip = (index: number, direction: 'left' | 'right') => {
@@ -320,6 +340,12 @@ export default function App() {
       next[targetIndex] = temp;
       return next;
     });
+
+    if (selectedClipIndex === index) {
+      setSelectedClipIndex(targetIndex);
+    } else if (selectedClipIndex === targetIndex) {
+      setSelectedClipIndex(index);
+    }
   };
 
   const handleUpdateTransition = (index: number, updated: Transition) => {
@@ -330,9 +356,8 @@ export default function App() {
     });
   };
 
-  const handleSelectClipForEdit = (clip: VideoClip, index: number) => {
+  const handleSelectClipForEdit = (_clip: VideoClip, index: number) => {
     setSelectedClipIndex(index);
-    setIsClipEditorOpen(true);
   };
 
   // Export Combined Video Sequence with Original Source Quality
@@ -445,7 +470,11 @@ export default function App() {
           <div className="lg:col-span-7 xl:col-span-7 flex flex-col min-h-0 h-full overflow-hidden">
             <VideoPlayer
               clips={clips}
-              transitions={transitions}
+              selectedClipIndex={selectedClipIndex}
+              onSelectClipIndex={setSelectedClipIndex}
+              onUpdateClip={handleUpdateClip}
+              onRemoveClip={handleRemoveClip}
+              onMoveClip={handleMoveClip}
               overlaySettings={overlaySettings}
               aspectRatio={aspectRatio}
               onAddSampleClips={handleAddSampleClips}
@@ -460,10 +489,9 @@ export default function App() {
                 };
                 input.click();
               }}
+              transitions={transitions}
               currentTime={currentTime}
               onTimeUpdate={setCurrentTime}
-              onUpdateClip={handleUpdateClip}
-              selectedClipIndex={selectedClipIndex}
             />
           </div>
 
@@ -497,23 +525,6 @@ export default function App() {
           />
         </div>
       </main>
-
-      {/* Clip Trimming & Properties Modal */}
-      {isClipEditorOpen && selectedClipIndex !== null && clips[selectedClipIndex] && (
-        <ClipEditorModal
-          isOpen={isClipEditorOpen}
-          clip={clips[selectedClipIndex]}
-          onClose={() => setIsClipEditorOpen(false)}
-          onSave={(updated) => {
-            if (selectedClipIndex !== null) {
-              handleUpdateClip(selectedClipIndex, updated);
-            }
-          }}
-          hornConfig={overlaySettings.hornConfig}
-          goalHornSound={overlaySettings.goalHornSound}
-          overlaySettings={overlaySettings}
-        />
-      )}
 
       {/* Export / Render Progress Modal */}
       {isExportModalOpen && (

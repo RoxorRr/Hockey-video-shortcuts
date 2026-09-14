@@ -26,6 +26,10 @@ import {
   Layers,
   ArrowRight,
   Flame,
+  ZoomIn,
+  Move,
+  Crosshair,
+  Tag,
 } from 'lucide-react';
 import { playGoalHorn, playArenaBuzzer, playHornSound } from '../lib/audio';
 
@@ -325,6 +329,15 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
       scorebugOverride: { ...settings.scorebug },
       playerBannerOverride: { ...settings.playerBanner },
     });
+  };
+
+  const updateCurrentClipField = (updates: Partial<VideoClip>) => {
+    if (isEditingClip && currentClip && onUpdateClip) {
+      onUpdateClip(selectedClipIndex!, {
+        ...currentClip,
+        ...updates,
+      });
+    }
   };
 
   const hornConfig: GoalHornConfig = settings.hornConfig || {
@@ -1040,6 +1053,80 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
 
             {hornConfig.enabled && (
               <div className="space-y-3 pt-0.5 text-xs">
+                {/* Selected Clip Goal Horn Override */}
+                {isEditingClip && currentClip && (
+                  <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-amber-400 text-xs flex items-center gap-1.5 uppercase font-['Chakra_Petch']">
+                        <Volume2 className="w-3.5 h-3.5" />
+                        Clip #{selectedClipIndex! + 1} Horn Trigger
+                      </span>
+                      {currentClip.hornTimingOverride !== undefined && (
+                        <span className="text-[10px] font-mono font-bold text-amber-300 bg-amber-950/80 px-1.5 py-0.5 rounded border border-amber-800/60">
+                          {currentClip.hornTimingOverride.toFixed(1)}s into clip
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Timing Offset Slider */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                        <span>Trigger Offset</span>
+                        <span className="font-mono text-amber-300">
+                          {(currentClip.hornTimingOverride ?? hornConfig.clipOffsetSeconds ?? 0.5).toFixed(1)}s
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={Math.max(3.0, (currentClip.endTime || currentClip.originalDuration || 5.0) - (currentClip.startTime || 0))}
+                        step={0.1}
+                        value={currentClip.hornTimingOverride ?? hornConfig.clipOffsetSeconds ?? 0.5}
+                        onChange={(e) => updateCurrentClipField({ hornTimingOverride: parseFloat(e.target.value) || 0 })}
+                        className="w-full h-1.5 bg-slate-950 rounded appearance-none cursor-pointer accent-amber-400"
+                      />
+                      <div className="flex items-center gap-1 pt-1 flex-wrap">
+                        {[0.0, 0.5, 1.0, 1.5, 2.0].map((sec) => (
+                          <button
+                            key={sec}
+                            type="button"
+                            onClick={() => updateCurrentClipField({ hornTimingOverride: sec })}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition ${
+                              (currentClip.hornTimingOverride ?? hornConfig.clipOffsetSeconds) === sec
+                                ? 'bg-amber-500 text-slate-950 font-bold'
+                                : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                            }`}
+                          >
+                            {sec.toFixed(1)}s
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Clip Horn Checkboxes */}
+                    <div className="space-y-1 pt-1 border-t border-slate-800/80">
+                      <label className="flex items-center gap-2 cursor-pointer text-[11px] text-slate-300 hover:text-white">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(currentClip.hornDisabled)}
+                          onChange={(e) => updateCurrentClipField({ hornDisabled: e.target.checked })}
+                          className="rounded bg-slate-950 border-slate-700 text-red-500 focus:ring-0 w-3.5 h-3.5"
+                        />
+                        <span>Mute goal horn on this clip</span>
+                      </label>
+
+                      <label className="flex items-center gap-2 cursor-pointer text-[11px] text-slate-300 hover:text-white">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(currentClip.hasNativeHorn)}
+                          onChange={(e) => updateCurrentClipField({ hasNativeHorn: e.target.checked })}
+                          className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-0 w-3.5 h-3.5"
+                        />
+                        <span>Original clip already has native arena horn</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
                 {/* Audio Source Switcher: Synth vs Custom */}
                 <div className="grid grid-cols-2 gap-2">
                   <button
@@ -1201,51 +1288,198 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
           </div>
         )}
 
-        {/* ==================== TAB 4: FX, SIREN & STAMPS ==================== */}
+        {/* ==================== TAB 4: FX, FRAMING & HIGHLIGHT TAGS ==================== */}
         {activeTab === 'fx' && (
           <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 sm:p-3.5 space-y-3 text-xs">
-            <div className="border-b border-slate-800/60 pb-2">
-              <span className="font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-sky-400" />
-                Visual Broadcast FX
-              </span>
+            {/* Clip Highlight Tag & Zoom (If clip is selected) */}
+            {isEditingClip && currentClip ? (
+              <div className="space-y-3">
+                {/* Highlight Tag Selector */}
+                <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-white text-xs uppercase font-['Chakra_Petch'] flex items-center gap-1.5">
+                      <Tag className="w-3.5 h-3.5 text-red-500" />
+                      Clip #{selectedClipIndex! + 1} Highlight Tag
+                    </span>
+                    {currentClip.tag && (
+                      <button
+                        type="button"
+                        onClick={() => updateCurrentClipField({ tag: undefined, customTagText: '' })}
+                        className="text-[10px] text-slate-400 hover:text-red-400 transition cursor-pointer"
+                      >
+                        Clear Tag
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                    {[
+                      { id: 'GOAL', label: 'Goal', emoji: '🚨', color: 'bg-red-600 hover:bg-red-500 text-white' },
+                      { id: 'SAVE', label: 'Save', emoji: '🧤', color: 'bg-sky-600 hover:bg-sky-500 text-white' },
+                      { id: 'HIT', label: 'Big Hit', emoji: '💥', color: 'bg-orange-600 hover:bg-orange-500 text-white' },
+                      { id: 'DEKE', label: 'Deke', emoji: '⚡', color: 'bg-amber-600 hover:bg-amber-500 text-white' },
+                      { id: 'POWERPLAY', label: 'Powerplay', emoji: '🏒', color: 'bg-indigo-600 hover:bg-indigo-500 text-white' },
+                      { id: 'OT WINNER', label: 'OT Goal', emoji: '🏆', color: 'bg-emerald-600 hover:bg-emerald-500 text-white' },
+                      { id: 'CELEBRATION', label: 'Celly', emoji: '🎉', color: 'bg-fuchsia-600 hover:bg-fuchsia-500 text-white' },
+                    ].map((tagItem) => {
+                      const isSelected = currentClip.tag === tagItem.id;
+                      return (
+                        <button
+                          key={tagItem.id}
+                          type="button"
+                          onClick={() => updateCurrentClipField({ tag: tagItem.id as any })}
+                          className={`p-1.5 rounded-lg text-[11px] font-bold transition flex items-center justify-center gap-1 cursor-pointer border ${
+                            isSelected
+                              ? `${tagItem.color} border-white/40 shadow-md`
+                              : 'bg-slate-950 border-slate-800 text-slate-300 hover:text-white hover:bg-slate-850'
+                          }`}
+                        >
+                          <span>{tagItem.emoji}</span>
+                          <span>{tagItem.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Custom Highlight Text */}
+                  <div className="pt-1.5">
+                    <input
+                      type="text"
+                      placeholder="Custom tag banner text (optional)..."
+                      value={currentClip.customTagText || ''}
+                      onChange={(e) => updateCurrentClipField({ customTagText: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Player Zoom & Reframing */}
+                <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-white text-xs uppercase font-['Chakra_Petch'] flex items-center gap-1.5">
+                      <ZoomIn className="w-3.5 h-3.5 text-amber-400" />
+                      Zoom Magnification
+                    </span>
+                    <span className="font-mono text-amber-300 font-bold text-xs">
+                      {(currentClip.zoom ?? 1.0).toFixed(2)}x
+                    </span>
+                  </div>
+
+                  <input
+                    type="range"
+                    min={1.0}
+                    max={3.0}
+                    step={0.05}
+                    value={currentClip.zoom ?? 1.0}
+                    onChange={(e) => updateCurrentClipField({ zoom: parseFloat(e.target.value) || 1.0 })}
+                    className="w-full h-1.5 bg-slate-950 rounded appearance-none cursor-pointer accent-amber-400"
+                  />
+
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {[1.0, 1.25, 1.5, 1.8, 2.0, 2.5].map((z) => (
+                      <button
+                        key={z}
+                        type="button"
+                        onClick={() => updateCurrentClipField({ zoom: z })}
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold transition cursor-pointer ${
+                          Math.abs((currentClip.zoom ?? 1.0) - z) < 0.05
+                            ? 'bg-amber-500 text-slate-950 font-bold'
+                            : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                        }`}
+                      >
+                        {z.toFixed(2)}x
+                      </button>
+                    ))}
+                  </div>
+
+                  {(currentClip.zoom ?? 1.0) > 1.02 && (
+                    <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                      <div className="flex items-center justify-between text-[11px] text-slate-300">
+                        <span className="flex items-center gap-1 font-semibold">
+                          <Move className="w-3 h-3 text-sky-400" />
+                          Pan Reframe Focus
+                        </span>
+                        <span className="font-mono text-[10px] text-slate-400">
+                          X: {currentClip.panX ?? 0}% | Y: {currentClip.panY ?? 0}%
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-5 gap-1">
+                        {[
+                          { label: 'Left', x: -50, y: 0, resetZoom: false },
+                          { label: 'Center', x: 0, y: 0, resetZoom: false },
+                          { label: 'Right', x: 50, y: 0, resetZoom: false },
+                          { label: 'Net', x: 0, y: 40, resetZoom: false },
+                          { label: 'Reset', x: 0, y: 0, resetZoom: true },
+                        ].map((item) => (
+                          <button
+                            key={item.label}
+                            type="button"
+                            onClick={() => {
+                              if (item.resetZoom) {
+                                updateCurrentClipField({ zoom: 1.0, panX: 0, panY: 0 });
+                              } else {
+                                updateCurrentClipField({ panX: item.x, panY: item.y });
+                              }
+                            }}
+                            className="py-1 rounded bg-slate-950 hover:bg-slate-800 border border-slate-800 text-[10px] text-slate-300 hover:text-white font-medium text-center cursor-pointer"
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 bg-slate-900/60 rounded-xl border border-slate-800 text-center text-slate-400 text-xs">
+                Select a clip on the timeline to configure zoom, pan, and highlight tags.
+              </div>
+            )}
+
+            {/* Global Broadcast Toggles */}
+            <div className="pt-2 border-t border-slate-800 space-y-2">
+              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-['Chakra_Petch']">
+                Global Effects
+              </div>
+
+              <label className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
+                <div className="space-y-0.5">
+                  <span className="text-slate-200 font-bold flex items-center gap-1.5">
+                    <Flame className="w-3.5 h-3.5 text-red-500" />
+                    Red Siren Goal Light Flash
+                  </span>
+                  <p className="text-[11px] text-slate-400">
+                    Flashes stadium red alert flare when a goal is scored
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.sirenFlash}
+                  onChange={(e) => onChange({ ...settings, sirenFlash: e.target.checked })}
+                  className="rounded bg-slate-950 border-slate-700 text-red-500 focus:ring-0 w-4 h-4 cursor-pointer"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
+                <div className="space-y-0.5">
+                  <span className="text-slate-200 font-bold flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-sky-400" />
+                    Action Badges (GOAL / SAVE / HIT)
+                  </span>
+                  <p className="text-[11px] text-slate-400">
+                    Shows high-impact broadcast action badges on screen
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.showStamps}
+                  onChange={(e) => onChange({ ...settings, showStamps: e.target.checked })}
+                  className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-0 w-4 h-4 cursor-pointer"
+                />
+              </label>
             </div>
-
-            <label className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
-              <div className="space-y-0.5">
-                <span className="text-slate-200 font-bold flex items-center gap-1.5">
-                  <Flame className="w-3.5 h-3.5 text-red-500" />
-                  Red Siren Goal Light Flash
-                </span>
-                <p className="text-[11px] text-slate-400">
-                  Flashes stadium red alert flare when a goal is scored
-                </p>
-              </div>
-              <input
-                type="checkbox"
-                checked={settings.sirenFlash}
-                onChange={(e) => onChange({ ...settings, sirenFlash: e.target.checked })}
-                className="rounded bg-slate-950 border-slate-700 text-red-500 focus:ring-0 w-4 h-4 cursor-pointer"
-              />
-            </label>
-
-            <label className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
-              <div className="space-y-0.5">
-                <span className="text-slate-200 font-bold flex items-center gap-1.5">
-                  <Layers className="w-3.5 h-3.5 text-sky-400" />
-                  Action Badges (GOAL / SAVE / HIT)
-                </span>
-                <p className="text-[11px] text-slate-400">
-                  Shows high-impact broadcast action badges on screen
-                </p>
-              </div>
-              <input
-                type="checkbox"
-                checked={settings.showStamps}
-                onChange={(e) => onChange({ ...settings, showStamps: e.target.checked })}
-                className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-0 w-4 h-4 cursor-pointer"
-              />
-            </label>
           </div>
         )}
       </div>
