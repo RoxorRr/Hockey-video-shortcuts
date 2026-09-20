@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { HockeyOverlaySettings, GoalHornConfig, VideoClip, ScorebugConfig, PlayerBannerConfig } from '../types';
+import { HockeyOverlaySettings, GoalHornConfig, VideoClip, ScorebugConfig, PlayerBannerConfig, HockeyTag } from '../types';
 import { PlayerRosterPicker } from './PlayerRosterPicker';
 import { AIMusicControls } from './AIMusicControls';
 import { autoRememberPlayer } from '../lib/rosterStorage';
@@ -367,20 +367,24 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
     });
   };
 
-  // --- MASTER BROADCAST CONTROLS (Scorebug, Play Card, Horn, Music, FX) ---
+  // --- MASTER BROADCAST CONTROLS (Scorebug, Play Card, Highlight Tag, Horn, Music, FX) ---
   const isScorebugEnabled = Boolean(activeScorebug.enabled);
   const isPlayerBannerEnabled = Boolean(activePlayerBanner.enabled);
+  const isHighlightTagsEnabled = Boolean(
+    (settings.showHighlightTags ?? true) && settings.showStamps !== false
+  );
   const isHornEnabled = Boolean(
     settings.goalHornSound !== false && ((settings.hornConfig?.enabled ?? true) !== false)
   );
   const isMusicEnabled = Boolean(settings.backgroundMusic?.enabled);
   const isFxEnabled = Boolean(
-    settings.redSirenFlash || (settings as any).sirenFlash || settings.showStamps
+    settings.redSirenFlash || (settings as any).sirenFlash
   );
 
   const activeCount = [
     isScorebugEnabled,
     isPlayerBannerEnabled,
+    isHighlightTagsEnabled,
     isHornEnabled,
     isMusicEnabled,
     isFxEnabled,
@@ -428,21 +432,30 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
           },
       redSirenFlash: turnOn,
       showStamps: turnOn,
+      showHighlightTags: turnOn,
     };
     (updatedSettings as any).sirenFlash = turnOn;
 
-    // Synchronize customized clip overrides so no residual overlays stay enabled
+    // Synchronize customized clip overrides and tags
     if (onUpdateClip && clips.length > 0) {
       clips.forEach((c, idx) => {
+        const updates: Partial<VideoClip> = {};
         if (c.useCustomOverlays && (c.scorebugOverride || c.playerBannerOverride)) {
+          if (c.scorebugOverride) {
+            updates.scorebugOverride = { ...c.scorebugOverride, enabled: turnOn };
+          }
+          if (c.playerBannerOverride) {
+            updates.playerBannerOverride = { ...c.playerBannerOverride, enabled: turnOn };
+          }
+        }
+        if (!turnOn && (c.tag || c.customTagText)) {
+          updates.tag = undefined;
+          updates.customTagText = '';
+        }
+        if (Object.keys(updates).length > 0) {
           onUpdateClip(idx, {
             ...c,
-            scorebugOverride: c.scorebugOverride
-              ? { ...c.scorebugOverride, enabled: turnOn }
-              : undefined,
-            playerBannerOverride: c.playerBannerOverride
-              ? { ...c.playerBannerOverride, enabled: turnOn }
-              : undefined,
+            ...updates,
           });
         }
       });
@@ -451,9 +464,47 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
     onChange(updatedSettings);
     setSyncFeedback(
       turnOn
-        ? 'All 5 elements ON (Full Broadcast Mode)'
-        : 'All 5 elements OFF (Clean Raw Game Feed)'
+        ? 'All 6 elements ON (Full Broadcast Mode)'
+        : 'All 6 elements OFF (Clean Raw Game Feed - Tags Cleared)'
     );
+    setTimeout(() => setSyncFeedback(null), 3000);
+  };
+
+  const handleTurnOffAllClipTags = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (onUpdateClip && clips.length > 0) {
+      clips.forEach((c, idx) => {
+        onUpdateClip(idx, {
+          ...c,
+          tag: undefined,
+          customTagText: '',
+        });
+      });
+    }
+    onChange({
+      ...settings,
+      showHighlightTags: false,
+      showStamps: false,
+    });
+    setSyncFeedback(`Highlight Tag (GOAL) turned off & cleared on all ${clips.length} clips`);
+    setTimeout(() => setSyncFeedback(null), 3000);
+  };
+
+  const handleApplyTagToAllClips = (tagToApply: HockeyTag) => {
+    if (onUpdateClip && clips.length > 0) {
+      clips.forEach((c, idx) => {
+        onUpdateClip(idx, {
+          ...c,
+          tag: tagToApply,
+        });
+      });
+    }
+    onChange({
+      ...settings,
+      showHighlightTags: true,
+      showStamps: true,
+    });
+    setSyncFeedback(`Applied "${tagToApply}" tag to all ${clips.length} clips`);
     setTimeout(() => setSyncFeedback(null), 3000);
   };
 
@@ -470,6 +521,18 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
     const next = !isPlayerBannerEnabled;
     updateActivePlayerBanner('enabled', next);
     setSyncFeedback(`Player Card ${next ? 'Turned ON' : 'Turned OFF'}`);
+    setTimeout(() => setSyncFeedback(null), 2500);
+  };
+
+  const handleQuickToggleHighlightTags = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const next = !isHighlightTagsEnabled;
+    onChange({
+      ...settings,
+      showHighlightTags: next,
+      showStamps: next,
+    });
+    setSyncFeedback(`Highlight Tag ${next ? 'Display ON' : 'Display OFF'}`);
     setTimeout(() => setSyncFeedback(null), 2500);
   };
 
@@ -527,11 +590,10 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
     const updated = {
       ...settings,
       redSirenFlash: next,
-      showStamps: next,
       sirenFlash: next,
     };
     onChange(updated);
-    setSyncFeedback(`Visual & Arena FX ${next ? 'Turned ON' : 'Turned OFF'}`);
+    setSyncFeedback(`Goal Siren Flash FX ${next ? 'Turned ON' : 'Turned OFF'}`);
     setTimeout(() => setSyncFeedback(null), 2500);
   };
 
@@ -776,14 +838,14 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
             </span>
             <span
               className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border transition ${
-                activeCount === 5
+                activeCount === 6
                   ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/80'
                   : activeCount === 0
                   ? 'bg-slate-900 text-slate-400 border-slate-700'
                   : 'bg-amber-950/80 text-amber-300 border-amber-700/80'
               }`}
             >
-              {activeCount === 5 ? '5/5 All Active' : activeCount === 0 ? 'Clean Feed (All Off)' : `${activeCount}/5 Active`}
+              {activeCount === 6 ? '6/6 All Active' : activeCount === 0 ? 'Clean Feed (All Off)' : `${activeCount}/6 Active`}
             </span>
           </div>
 
@@ -798,7 +860,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
                   ? 'bg-slate-900/60 text-slate-500 border-slate-800 cursor-default opacity-60'
                   : 'bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 hover:text-white border-rose-800/60 hover:border-rose-600 shadow-xs'
               }`}
-              title="Turn OFF all 5 broadcast elements (Pure clean game feed with zero overlays or background audio)"
+              title="Turn OFF all broadcast elements & tags (Pure clean game feed with zero overlays or background audio)"
             >
               <EyeOff className="w-3 h-3 text-rose-400" />
               <span>All Off (Clean Feed)</span>
@@ -809,11 +871,11 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
               id="master-turn-all-on-btn"
               onClick={() => handleToggleAll(true)}
               className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition cursor-pointer flex items-center gap-1.5 font-['Chakra_Petch'] shadow-xs ${
-                activeCount === 5
+                activeCount === 6
                   ? 'bg-emerald-950/50 text-emerald-400 border-emerald-800/60 cursor-default opacity-70'
                   : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400/80'
               }`}
-              title="Turn ON all 5 broadcast elements (Scorebug, Player Card, Goal Horn, Background Music, and Arena FX)"
+              title="Turn ON all 6 broadcast elements (Scorebug, Player Card, Highlight Tags, Goal Horn, Background Music, and Siren FX)"
             >
               <Check className="w-3 h-3 stroke-[3]" />
               <span>All On</span>
@@ -821,8 +883,8 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
           </div>
         </div>
 
-        {/* Quick-Toggle Strip: 5 Direct Switches without tab-switching */}
-        <div className="grid grid-cols-5 gap-1.5 pt-1.5 border-t border-slate-900">
+        {/* Quick-Toggle Strip: 6 Direct Switches without tab-switching */}
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 pt-1.5 border-t border-slate-900">
           {/* 1. Scorebug Quick Toggle */}
           <div
             onClick={() => setActiveTab('scorebug')}
@@ -879,7 +941,36 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
             </button>
           </div>
 
-          {/* 3. Horn Quick Toggle */}
+          {/* 3. Highlight Tag (GOAL) Quick Toggle */}
+          <div
+            onClick={() => setActiveTab('fx')}
+            className={`p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between gap-1 text-center ${
+              isHighlightTagsEnabled
+                ? 'bg-red-950/40 border-red-600/60 text-red-200'
+                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700'
+            }`}
+            title="Click box to configure tags, or click switch to toggle tag badge display ON/OFF"
+          >
+            <div className="flex items-center gap-1 text-[10px] font-bold truncate">
+              <Tag className={`w-3 h-3 shrink-0 ${isHighlightTagsEnabled ? 'text-red-400' : 'text-slate-500'}`} />
+              <span className="truncate">Tag (GOAL)</span>
+            </div>
+            <button
+              type="button"
+              id="quick-toggle-tag-badge-btn"
+              onClick={handleQuickToggleHighlightTags}
+              className={`w-full py-0.5 px-1 rounded text-[9px] font-mono font-bold uppercase transition flex items-center justify-center gap-1 cursor-pointer border ${
+                isHighlightTagsEnabled
+                  ? 'bg-red-600 hover:bg-red-500 text-white border-red-400 shadow-xs'
+                  : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isHighlightTagsEnabled ? 'bg-white' : 'bg-slate-600'}`} />
+              <span>{isHighlightTagsEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+
+          {/* 4. Horn Quick Toggle */}
           <div
             onClick={() => setActiveTab('horn')}
             className={`p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between gap-1 text-center ${
@@ -907,7 +998,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
             </button>
           </div>
 
-          {/* 4. Music Quick Toggle */}
+          {/* 5. Music Quick Toggle */}
           <div
             onClick={() => setActiveTab('music')}
             className={`p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between gap-1 text-center ${
@@ -935,7 +1026,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
             </button>
           </div>
 
-          {/* 5. FX Quick Toggle */}
+          {/* 6. FX Quick Toggle */}
           <div
             onClick={() => setActiveTab('fx')}
             className={`p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between gap-1 text-center ${
@@ -947,7 +1038,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
           >
             <div className="flex items-center gap-1 text-[10px] font-bold truncate">
               <Sparkles className={`w-3 h-3 shrink-0 ${isFxEnabled ? 'text-purple-400' : 'text-slate-500'}`} />
-              <span className="truncate">FX</span>
+              <span className="truncate">Siren FX</span>
             </div>
             <button
               type="button"
@@ -1687,6 +1778,54 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
         {/* ==================== TAB 4: FX, FRAMING & HIGHLIGHT TAGS ==================== */}
         {activeTab === 'fx' && (
           <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 sm:p-3.5 space-y-3 text-xs">
+            {/* 1. Global Highlight Tag Master Controls (Always visible for all clips) */}
+            <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Tag className={`w-3.5 h-3.5 ${isHighlightTagsEnabled ? 'text-red-400' : 'text-slate-500'}`} />
+                  <span className="font-bold text-white text-xs uppercase font-['Chakra_Petch']">
+                    Highlight Tags (GOAL / SAVE / HIT)
+                  </span>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 text-slate-400">
+                    {clips.filter((c) => c.tag).length}/{clips.length} tagged
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {/* Master 1-click turn off for all clips */}
+                  <button
+                    type="button"
+                    id="turn-off-all-clip-tags-btn"
+                    onClick={handleTurnOffAllClipTags}
+                    className="text-[11px] font-bold px-2 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 hover:text-white border border-rose-800/60 transition cursor-pointer flex items-center gap-1 font-['Chakra_Petch'] shadow-xs"
+                    title="Remove and turn off highlight tags from every clip in the timeline"
+                  >
+                    <EyeOff className="w-3 h-3 text-rose-400" />
+                    <span>Turn Off for All Clips</span>
+                  </button>
+
+                  {/* Display On/Off Toggle Button */}
+                  <button
+                    type="button"
+                    onClick={handleQuickToggleHighlightTags}
+                    className={`text-[11px] font-bold px-2 py-1 rounded-lg border transition cursor-pointer flex items-center gap-1 font-mono uppercase ${
+                      isHighlightTagsEnabled
+                        ? 'bg-red-600 hover:bg-red-500 text-white border-red-400'
+                        : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+                    }`}
+                    title="Toggle highlight tag banner visibility on screen"
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${isHighlightTagsEnabled ? 'bg-white' : 'bg-slate-600'}`} />
+                    <span>{isHighlightTagsEnabled ? 'Display ON' : 'Display OFF'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <p className="text-[11px] text-slate-400">
+                Turn off highlight tags across all clips simultaneously, or select a clip below to customize its individual tag.
+              </p>
+            </div>
+
             {/* Clip Highlight Tag & Zoom (If clip is selected) */}
             {isEditingClip && currentClip ? (
               <div className="space-y-3">
@@ -1697,18 +1836,44 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
                       <Tag className="w-3.5 h-3.5 text-red-500" />
                       Clip #{selectedClipIndex! + 1} Highlight Tag
                     </span>
-                    {currentClip.tag && (
-                      <button
-                        type="button"
-                        onClick={() => updateCurrentClipField({ tag: undefined, customTagText: '' })}
-                        className="text-[10px] text-slate-400 hover:text-red-400 transition cursor-pointer"
-                      >
-                        Clear Tag
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {currentClip.tag && (
+                        <button
+                          type="button"
+                          onClick={() => handleApplyTagToAllClips(currentClip.tag!)}
+                          className="text-[10px] text-sky-400 hover:text-sky-300 font-medium transition cursor-pointer"
+                          title="Apply this tag to every clip"
+                        >
+                          Apply to All
+                        </button>
+                      )}
+                      {currentClip.tag && (
+                        <button
+                          type="button"
+                          onClick={() => updateCurrentClipField({ tag: undefined, customTagText: '' })}
+                          className="text-[10px] text-slate-400 hover:text-red-400 transition cursor-pointer"
+                        >
+                          Clear Tag
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                    {/* NONE / OFF Option */}
+                    <button
+                      type="button"
+                      onClick={() => updateCurrentClipField({ tag: undefined, customTagText: '' })}
+                      className={`p-1.5 rounded-lg text-[11px] font-bold transition flex items-center justify-center gap-1 cursor-pointer border ${
+                        !currentClip.tag
+                          ? 'bg-slate-800 border-slate-600 text-white shadow-xs'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-850'
+                      }`}
+                    >
+                      <span>🚫</span>
+                      <span>None (Off)</span>
+                    </button>
+
                     {[
                       { id: 'GOAL', label: 'Goal', emoji: '🚨', color: 'bg-red-600 hover:bg-red-500 text-white' },
                       { id: 'SAVE', label: 'Save', emoji: '🧤', color: 'bg-sky-600 hover:bg-sky-500 text-white' },
@@ -1862,16 +2027,22 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
                 <div className="space-y-0.5">
                   <span className="text-slate-200 font-bold flex items-center gap-1.5">
                     <Layers className="w-3.5 h-3.5 text-sky-400" />
-                    Action Badges (GOAL / SAVE / HIT)
+                    Action Badges & Highlight Tags (GOAL / SAVE / HIT)
                   </span>
                   <p className="text-[11px] text-slate-400">
-                    Shows high-impact broadcast action badges on screen
+                    Shows high-impact broadcast action badges & top-right corner stamps on screen
                   </p>
                 </div>
                 <input
                   type="checkbox"
-                  checked={settings.showStamps}
-                  onChange={(e) => onChange({ ...settings, showStamps: e.target.checked })}
+                  checked={(settings.showStamps ?? true) && (settings.showHighlightTags ?? true)}
+                  onChange={(e) =>
+                    onChange({
+                      ...settings,
+                      showStamps: e.target.checked,
+                      showHighlightTags: e.target.checked,
+                    })
+                  }
                   className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-0 w-4 h-4 cursor-pointer"
                 />
               </label>

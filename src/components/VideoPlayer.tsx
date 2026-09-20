@@ -1135,7 +1135,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
 
               {/* Highlight Action Tag - Top Right */}
-              {(effectiveTag || effectiveTagText) && (
+              {Boolean(effectiveTag || effectiveTagText) &&
+                overlaySettings.showStamps !== false &&
+                overlaySettings.showHighlightTags !== false && (
                 <div className="absolute top-2.5 right-2.5 z-20 pointer-events-none select-none flex flex-col items-end gap-1 animate-in fade-in duration-100">
                   <span
                     className={`inline-flex items-center gap-1 text-[11px] font-black italic tracking-wider px-2.5 py-1 rounded-md shadow-2xl border ${
@@ -1160,7 +1162,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     <span>{effectiveTagText || effectiveTag}</span>
                   </span>
 
-                  {isEligibleForHorn && (
+                  {isEligibleForHorn &&
+                    overlaySettings.goalHornSound !== false &&
+                    overlaySettings.hornConfig?.enabled !== false && (
                     <div className="bg-slate-950/90 backdrop-blur-xs border border-amber-500/60 text-amber-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded shadow flex items-center gap-1">
                       <Volume2 className="w-3 h-3 text-amber-400 animate-pulse" />
                       <span>Horn: {activeTriggerOffset.toFixed(1)}s</span>
@@ -1169,8 +1173,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </div>
               )}
 
-              {/* Horn Marker if no tag is selected */}
-              {!effectiveTag && !effectiveTagText && isEligibleForHorn && (
+              {/* Standalone Horn Marker if tag is hidden/off */}
+              {(!effectiveTag ||
+                !effectiveTagText ||
+                overlaySettings.showStamps === false ||
+                overlaySettings.showHighlightTags === false) &&
+                isEligibleForHorn &&
+                overlaySettings.goalHornSound !== false &&
+                overlaySettings.hornConfig?.enabled !== false && (
                 <div className="absolute top-2.5 right-2.5 z-20 pointer-events-none select-none animate-in fade-in duration-100">
                   <div className="bg-slate-950/90 backdrop-blur-xs border border-amber-500/60 text-amber-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded shadow flex items-center gap-1">
                     <Volume2 className="w-3 h-3 text-amber-400 animate-pulse" />

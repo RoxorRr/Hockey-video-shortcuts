@@ -59,6 +59,7 @@ export default function App() {
     },
     redSirenFlash: true,
     showStamps: true,
+    showHighlightTags: true,
     backgroundMusic: {
       enabled: false,
       volume: 0.75,

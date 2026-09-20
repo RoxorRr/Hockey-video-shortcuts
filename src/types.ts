@@ -146,6 +146,7 @@ export interface HockeyOverlaySettings {
   backgroundMusic?: BackgroundMusicSettings;
   redSirenFlash: boolean;
   showStamps: boolean;
+  showHighlightTags?: boolean;
 }
 
 export interface YouTubeUploadMetadata {

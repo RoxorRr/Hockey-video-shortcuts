@@ -657,7 +657,7 @@ export function drawHockeyOverlays(
   }
 
   // 3. Hockey Action Stamp (e.g. "GOAL", "UNREAL SAVE")
-  if (settings.showStamps && currentClip?.tag) {
+  if (settings.showStamps && (settings.showHighlightTags ?? true) && currentClip?.tag) {
     ctx.save();
     const tag = currentClip.tag;
     const text = currentClip.customTagText || tag;
