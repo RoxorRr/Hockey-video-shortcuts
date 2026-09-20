@@ -22,6 +22,8 @@ import {
   Scissors,
   Check,
   FileAudio,
+  AlertCircle,
+  Info,
 } from 'lucide-react';
 
 interface AIMusicControlsProps {
@@ -210,6 +212,13 @@ export const AIMusicControls: React.FC<AIMusicControlsProps> = ({
   const handleLoadCustomUrl = () => {
     const url = customUrlInput.trim();
     if (!url) return;
+
+    if (url.toLowerCase().includes('spotify.com') || url.toLowerCase().includes('youtube.com') || url.toLowerCase().includes('youtu.be')) {
+      setFeedback('Spotify and YouTube web links cannot be loaded directly. Please download the MP3 and use the Upload tab!');
+      setTimeout(() => setFeedback(null), 5000);
+      return;
+    }
+
     try {
       const track = createUrlMusicTrack(url);
       update({
@@ -611,7 +620,7 @@ export const AIMusicControls: React.FC<AIMusicControlsProps> = ({
 
       {/* ================= TAB 3: STREAM AUDIO URL ================= */}
       {activeTab === 'url' && (
-        <div className="space-y-2 bg-slate-900/60 p-2.5 rounded-xl border border-slate-800">
+        <div className="space-y-2.5 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
           <label className="text-xs font-['Chakra_Petch'] font-bold text-slate-200 flex items-center gap-1.5">
             <Globe className="w-3.5 h-3.5 text-teal-400" />
             Direct Audio Link / Stream URL
@@ -632,9 +641,51 @@ export const AIMusicControls: React.FC<AIMusicControlsProps> = ({
               Load
             </button>
           </div>
-          <p className="text-[10px] text-slate-500">
-            Paste any direct HTTPS audio stream link or hosted MP3 track.
-          </p>
+
+          {/* Smart detection for Spotify / YouTube links */}
+          {(customUrlInput.toLowerCase().includes('spotify.com') ||
+            customUrlInput.toLowerCase().includes('youtube.com') ||
+            customUrlInput.toLowerCase().includes('youtu.be')) ? (
+            <div className="p-3 rounded-lg bg-amber-950/40 border border-amber-700/60 text-amber-200 text-xs space-y-2 animate-in fade-in duration-200">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-1.5">
+                  <p className="font-bold text-amber-300">
+                    {customUrlInput.toLowerCase().includes('spotify.com') ? 'Spotify' : 'YouTube Music'} links cannot be streamed directly
+                  </p>
+                  <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                    Streaming services encrypt their audio inside proprietary players with DRM and do not provide raw audio streams. To use this track in your video:
+                  </p>
+                  <div className="flex items-center gap-2 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('upload');
+                        setCustomUrlInput('');
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] transition shadow cursor-pointer font-['Chakra_Petch']"
+                    >
+                      <UploadCloud className="w-3.5 h-3.5" />
+                      Switch to Upload MP3/WAV Tab
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800 text-[11px] text-slate-400 space-y-1">
+              <div className="flex items-center gap-1.5 text-slate-300 font-medium">
+                <Info className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span>Supported URL Formats:</span>
+              </div>
+              <p className="text-[10px] text-slate-400 pl-5">
+                Must be a direct link to an audio file (ending in <code className="text-emerald-400">.mp3</code>, <code className="text-emerald-400">.wav</code>, or <code className="text-emerald-400">.ogg</code>) hosted on the web.
+              </p>
+              <p className="text-[10px] text-slate-500 pl-5">
+                Note: Spotify and YouTube Music links are web players and cannot be streamed directly due to DRM restrictions. For those songs, download the MP3 to your computer and use the <strong className="text-slate-300">Upload Audio</strong> tab!
+              </p>
+            </div>
+          )}
         </div>
       )}
 

@@ -31,6 +31,9 @@ import {
   Move,
   Crosshair,
   Tag,
+  Power,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { playGoalHorn, playArenaBuzzer, playHornSound } from '../lib/audio';
 
@@ -364,6 +367,174 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
     });
   };
 
+  // --- MASTER BROADCAST CONTROLS (Scorebug, Play Card, Horn, Music, FX) ---
+  const isScorebugEnabled = Boolean(activeScorebug.enabled);
+  const isPlayerBannerEnabled = Boolean(activePlayerBanner.enabled);
+  const isHornEnabled = Boolean(
+    settings.goalHornSound !== false && ((settings.hornConfig?.enabled ?? true) !== false)
+  );
+  const isMusicEnabled = Boolean(settings.backgroundMusic?.enabled);
+  const isFxEnabled = Boolean(
+    settings.redSirenFlash || (settings as any).sirenFlash || settings.showStamps
+  );
+
+  const activeCount = [
+    isScorebugEnabled,
+    isPlayerBannerEnabled,
+    isHornEnabled,
+    isMusicEnabled,
+    isFxEnabled,
+  ].filter(Boolean).length;
+
+  const handleToggleAll = (turnOn: boolean) => {
+    const updatedSettings: HockeyOverlaySettings = {
+      ...settings,
+      scorebug: {
+        ...settings.scorebug,
+        enabled: turnOn,
+      },
+      playerBanner: {
+        ...settings.playerBanner,
+        enabled: turnOn,
+      },
+      goalHornSound: turnOn,
+      hornConfig: {
+        ...(settings.hornConfig || {
+          enabled: true,
+          useCustomHorn: false,
+          triggerMode: 'every_clip',
+          clipOffsetSeconds: 0.5,
+          volume: 1.0,
+          hornDuration: 5.0,
+          skipClipsWithNativeHorn: true,
+          duckVideoAudio: true,
+        }),
+        enabled: turnOn,
+      },
+      backgroundMusic: settings.backgroundMusic
+        ? {
+            ...settings.backgroundMusic,
+            enabled: turnOn,
+          }
+        : {
+            enabled: turnOn,
+            volume: 0.75,
+            originalVideoVolume: 1.0,
+            duckOnGoalHorn: true,
+            loop: true,
+            currentTrack: null,
+            selectedStyle: 'arena-rock',
+            customPrompt: '',
+          },
+      redSirenFlash: turnOn,
+      showStamps: turnOn,
+    };
+    (updatedSettings as any).sirenFlash = turnOn;
+
+    // Synchronize customized clip overrides so no residual overlays stay enabled
+    if (onUpdateClip && clips.length > 0) {
+      clips.forEach((c, idx) => {
+        if (c.useCustomOverlays && (c.scorebugOverride || c.playerBannerOverride)) {
+          onUpdateClip(idx, {
+            ...c,
+            scorebugOverride: c.scorebugOverride
+              ? { ...c.scorebugOverride, enabled: turnOn }
+              : undefined,
+            playerBannerOverride: c.playerBannerOverride
+              ? { ...c.playerBannerOverride, enabled: turnOn }
+              : undefined,
+          });
+        }
+      });
+    }
+
+    onChange(updatedSettings);
+    setSyncFeedback(
+      turnOn
+        ? 'All 5 elements ON (Full Broadcast Mode)'
+        : 'All 5 elements OFF (Clean Raw Game Feed)'
+    );
+    setTimeout(() => setSyncFeedback(null), 3000);
+  };
+
+  const handleQuickToggleScorebug = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const next = !isScorebugEnabled;
+    updateActiveScorebug('enabled', next);
+    setSyncFeedback(`Scorebug ${next ? 'Turned ON' : 'Turned OFF'}`);
+    setTimeout(() => setSyncFeedback(null), 2500);
+  };
+
+  const handleQuickTogglePlayerBanner = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const next = !isPlayerBannerEnabled;
+    updateActivePlayerBanner('enabled', next);
+    setSyncFeedback(`Player Card ${next ? 'Turned ON' : 'Turned OFF'}`);
+    setTimeout(() => setSyncFeedback(null), 2500);
+  };
+
+  const handleQuickToggleHorn = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const next = !isHornEnabled;
+    updateHornConfig({ enabled: next });
+    onChange({
+      ...settings,
+      goalHornSound: next,
+      hornConfig: {
+        ...(settings.hornConfig || {
+          enabled: next,
+          useCustomHorn: false,
+          triggerMode: 'every_clip',
+          clipOffsetSeconds: 0.5,
+          volume: 1.0,
+          hornDuration: 5.0,
+          skipClipsWithNativeHorn: true,
+          duckVideoAudio: true,
+        }),
+        enabled: next,
+      },
+    });
+    setSyncFeedback(`Goal Horn ${next ? 'Turned ON' : 'Muted'}`);
+    setTimeout(() => setSyncFeedback(null), 2500);
+  };
+
+  const handleQuickToggleMusic = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const next = !isMusicEnabled;
+    onChange({
+      ...settings,
+      backgroundMusic: {
+        ...(settings.backgroundMusic || {
+          enabled: next,
+          volume: 0.75,
+          originalVideoVolume: 1.0,
+          duckOnGoalHorn: true,
+          loop: true,
+          currentTrack: null,
+          selectedStyle: 'arena-rock',
+          customPrompt: '',
+        }),
+        enabled: next,
+      },
+    });
+    setSyncFeedback(`Background Music ${next ? 'Turned ON' : 'Muted'}`);
+    setTimeout(() => setSyncFeedback(null), 2500);
+  };
+
+  const handleQuickToggleFx = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const next = !isFxEnabled;
+    const updated = {
+      ...settings,
+      redSirenFlash: next,
+      showStamps: next,
+      sirenFlash: next,
+    };
+    onChange(updated);
+    setSyncFeedback(`Visual & Arena FX ${next ? 'Turned ON' : 'Turned OFF'}`);
+    setTimeout(() => setSyncFeedback(null), 2500);
+  };
+
   const handleUploadCustomHorn = (file: File) => {
     if (!file) return;
 
@@ -592,6 +763,208 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
         </div>
       )}
 
+      {/* ========================================================================= */}
+      {/* MASTER BROADCAST SUITE (Scorebug, Play Card, Horn, Music, FX)             */}
+      {/* Provides 1-click "Turn All On" / "Turn All Off" and direct quick-toggles  */}
+      {/* ========================================================================= */}
+      <div className="shrink-0 bg-slate-950/95 border border-slate-800/90 rounded-xl p-2.5 mb-2.5 shadow-sm space-y-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-['Chakra_Petch'] text-xs font-bold text-white tracking-wider flex items-center gap-1.5 uppercase">
+              <Power className={`w-3.5 h-3.5 ${activeCount > 0 ? 'text-emerald-400' : 'text-slate-500'}`} />
+              Broadcast Controls
+            </span>
+            <span
+              className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border transition ${
+                activeCount === 5
+                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/80'
+                  : activeCount === 0
+                  ? 'bg-slate-900 text-slate-400 border-slate-700'
+                  : 'bg-amber-950/80 text-amber-300 border-amber-700/80'
+              }`}
+            >
+              {activeCount === 5 ? '5/5 All Active' : activeCount === 0 ? 'Clean Feed (All Off)' : `${activeCount}/5 Active`}
+            </span>
+          </div>
+
+          {/* Master 1-Click Group Actions */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              id="master-turn-all-off-btn"
+              onClick={() => handleToggleAll(false)}
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition cursor-pointer flex items-center gap-1.5 font-['Chakra_Petch'] ${
+                activeCount === 0
+                  ? 'bg-slate-900/60 text-slate-500 border-slate-800 cursor-default opacity-60'
+                  : 'bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 hover:text-white border-rose-800/60 hover:border-rose-600 shadow-xs'
+              }`}
+              title="Turn OFF all 5 broadcast elements (Pure clean game feed with zero overlays or background audio)"
+            >
+              <EyeOff className="w-3 h-3 text-rose-400" />
+              <span>All Off (Clean Feed)</span>
+            </button>
+
+            <button
+              type="button"
+              id="master-turn-all-on-btn"
+              onClick={() => handleToggleAll(true)}
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition cursor-pointer flex items-center gap-1.5 font-['Chakra_Petch'] shadow-xs ${
+                activeCount === 5
+                  ? 'bg-emerald-950/50 text-emerald-400 border-emerald-800/60 cursor-default opacity-70'
+                  : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400/80'
+              }`}
+              title="Turn ON all 5 broadcast elements (Scorebug, Player Card, Goal Horn, Background Music, and Arena FX)"
+            >
+              <Check className="w-3 h-3 stroke-[3]" />
+              <span>All On</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Quick-Toggle Strip: 5 Direct Switches without tab-switching */}
+        <div className="grid grid-cols-5 gap-1.5 pt-1.5 border-t border-slate-900">
+          {/* 1. Scorebug Quick Toggle */}
+          <div
+            onClick={() => setActiveTab('scorebug')}
+            className={`p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between gap-1 text-center ${
+              isScorebugEnabled
+                ? 'bg-sky-950/40 border-sky-600/60 text-sky-200'
+                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700'
+            }`}
+            title="Click box to view settings, or click switch to toggle ON/OFF"
+          >
+            <div className="flex items-center gap-1 text-[10px] font-bold truncate">
+              <Shield className={`w-3 h-3 shrink-0 ${isScorebugEnabled ? 'text-sky-400' : 'text-slate-500'}`} />
+              <span className="truncate">Scorebug</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleQuickToggleScorebug}
+              className={`w-full py-0.5 px-1 rounded text-[9px] font-mono font-bold uppercase transition flex items-center justify-center gap-1 cursor-pointer border ${
+                isScorebugEnabled
+                  ? 'bg-sky-600 hover:bg-sky-500 text-white border-sky-400 shadow-xs'
+                  : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isScorebugEnabled ? 'bg-white' : 'bg-slate-600'}`} />
+              <span>{isScorebugEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+
+          {/* 2. Play Card Quick Toggle */}
+          <div
+            onClick={() => setActiveTab('player')}
+            className={`p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between gap-1 text-center ${
+              isPlayerBannerEnabled
+                ? 'bg-red-950/40 border-red-600/60 text-red-200'
+                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700'
+            }`}
+            title="Click box to view settings, or click switch to toggle ON/OFF"
+          >
+            <div className="flex items-center gap-1 text-[10px] font-bold truncate">
+              <User className={`w-3 h-3 shrink-0 ${isPlayerBannerEnabled ? 'text-red-400' : 'text-slate-500'}`} />
+              <span className="truncate">Play Card</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleQuickTogglePlayerBanner}
+              className={`w-full py-0.5 px-1 rounded text-[9px] font-mono font-bold uppercase transition flex items-center justify-center gap-1 cursor-pointer border ${
+                isPlayerBannerEnabled
+                  ? 'bg-red-600 hover:bg-red-500 text-white border-red-400 shadow-xs'
+                  : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isPlayerBannerEnabled ? 'bg-white' : 'bg-slate-600'}`} />
+              <span>{isPlayerBannerEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+
+          {/* 3. Horn Quick Toggle */}
+          <div
+            onClick={() => setActiveTab('horn')}
+            className={`p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between gap-1 text-center ${
+              isHornEnabled
+                ? 'bg-amber-950/40 border-amber-600/60 text-amber-200'
+                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700'
+            }`}
+            title="Click box to view settings, or click switch to toggle ON/OFF"
+          >
+            <div className="flex items-center gap-1 text-[10px] font-bold truncate">
+              <Volume2 className={`w-3 h-3 shrink-0 ${isHornEnabled ? 'text-amber-400' : 'text-slate-500'}`} />
+              <span className="truncate">Horn</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleQuickToggleHorn}
+              className={`w-full py-0.5 px-1 rounded text-[9px] font-mono font-bold uppercase transition flex items-center justify-center gap-1 cursor-pointer border ${
+                isHornEnabled
+                  ? 'bg-amber-600 hover:bg-amber-500 text-slate-950 border-amber-400 font-extrabold shadow-xs'
+                  : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isHornEnabled ? 'bg-slate-950' : 'bg-slate-600'}`} />
+              <span>{isHornEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+
+          {/* 4. Music Quick Toggle */}
+          <div
+            onClick={() => setActiveTab('music')}
+            className={`p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between gap-1 text-center ${
+              isMusicEnabled
+                ? 'bg-emerald-950/40 border-emerald-600/60 text-emerald-200'
+                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700'
+            }`}
+            title="Click box to view settings, or click switch to toggle ON/OFF"
+          >
+            <div className="flex items-center gap-1 text-[10px] font-bold truncate">
+              <Music className={`w-3 h-3 shrink-0 ${isMusicEnabled ? 'text-emerald-400' : 'text-slate-500'}`} />
+              <span className="truncate">Music</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleQuickToggleMusic}
+              className={`w-full py-0.5 px-1 rounded text-[9px] font-mono font-bold uppercase transition flex items-center justify-center gap-1 cursor-pointer border ${
+                isMusicEnabled
+                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400 shadow-xs'
+                  : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isMusicEnabled ? 'bg-white' : 'bg-slate-600'}`} />
+              <span>{isMusicEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+
+          {/* 5. FX Quick Toggle */}
+          <div
+            onClick={() => setActiveTab('fx')}
+            className={`p-1.5 rounded-lg border transition cursor-pointer flex flex-col items-center justify-between gap-1 text-center ${
+              isFxEnabled
+                ? 'bg-purple-950/40 border-purple-600/60 text-purple-200'
+                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700'
+            }`}
+            title="Click box to view settings, or click switch to toggle ON/OFF"
+          >
+            <div className="flex items-center gap-1 text-[10px] font-bold truncate">
+              <Sparkles className={`w-3 h-3 shrink-0 ${isFxEnabled ? 'text-purple-400' : 'text-slate-500'}`} />
+              <span className="truncate">FX</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleQuickToggleFx}
+              className={`w-full py-0.5 px-1 rounded text-[9px] font-mono font-bold uppercase transition flex items-center justify-center gap-1 cursor-pointer border ${
+                isFxEnabled
+                  ? 'bg-purple-600 hover:bg-purple-500 text-white border-purple-400 shadow-xs'
+                  : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isFxEnabled ? 'bg-white' : 'bg-slate-600'}`} />
+              <span>{isFxEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* Inspector Tab Bar */}
       <div className="shrink-0 flex items-center gap-1 bg-slate-950/90 p-1 rounded-xl border border-slate-800 mb-2.5">
         <button
@@ -603,6 +976,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isScorebugEnabled ? 'bg-emerald-400' : 'bg-slate-600'}`} />
           <Shield className="w-3.5 h-3.5 text-sky-400" />
           <span>Scorebug</span>
           <span className="text-[10px] font-mono text-white/80 hidden sm:inline">
@@ -619,6 +993,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isPlayerBannerEnabled ? 'bg-emerald-400' : 'bg-slate-600'}`} />
           <User className="w-3.5 h-3.5 text-red-400" />
           <span>Player Card</span>
         </button>
@@ -632,6 +1007,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
               : 'text-slate-400 hover:text-white hover:bg-slate-900'
           }`}
         >
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isHornEnabled ? 'bg-emerald-400' : 'bg-slate-600'}`} />
           <Volume2 className="w-3.5 h-3.5 text-amber-400" />
           <span>Horn</span>
         </button>
@@ -646,6 +1022,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
           }`}
           title="Real Sports Music & Soundtracks (80s, 90s, 00s, Custom Uploads)"
         >
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isMusicEnabled ? 'bg-emerald-400' : 'bg-slate-600'}`} />
           <Music className="w-3.5 h-3.5 text-emerald-400" />
           <span>Music</span>
           {settings.backgroundMusic?.enabled && (
@@ -663,6 +1040,7 @@ export const OverlayControls: React.FC<OverlayControlsProps> = ({
           }`}
           title="Red Siren Light and Broadcast Stamps"
         >
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isFxEnabled ? 'bg-emerald-400' : 'bg-slate-600'}`} />
           <Sparkles className="w-3.5 h-3.5 text-sky-400" />
           <span className="hidden sm:inline">FX</span>
         </button>

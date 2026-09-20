@@ -188,7 +188,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       ? {
           ...overlaySettings.scorebug,
           ...clip.scorebugOverride,
-          enabled: clip.scorebugOverride.enabled !== false,
+          enabled:
+            clip.scorebugOverride.enabled !== undefined
+              ? clip.scorebugOverride.enabled
+              : overlaySettings.scorebug.enabled,
         }
       : overlaySettings.scorebug;
 
@@ -197,7 +200,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       ? {
           ...overlaySettings.playerBanner,
           ...clip.playerBannerOverride,
-          enabled: clip.playerBannerOverride.enabled !== false,
+          enabled:
+            clip.playerBannerOverride.enabled !== undefined
+              ? clip.playerBannerOverride.enabled
+              : overlaySettings.playerBanner.enabled,
         }
       : overlaySettings.playerBanner;
 
@@ -1195,7 +1201,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           )}
 
           {/* Goal Siren Firing Alert */}
-          {isHornFiring && (
+          {isHornFiring && overlaySettings.redSirenFlash !== false && (overlaySettings as any).sirenFlash !== false && (
             <div className="absolute inset-0 pointer-events-none z-30 flex items-center justify-center bg-red-600/20 border-4 border-red-500/90 rounded-xl animate-pulse">
               <div className="bg-slate-950/95 border-2 border-amber-400 text-amber-300 font-['Chakra_Petch'] font-black px-4 py-2 rounded-xl shadow-2xl flex items-center gap-2.5 text-sm tracking-wider uppercase shadow-amber-500/50">
                 <span className="text-xl animate-bounce">🚨</span>
