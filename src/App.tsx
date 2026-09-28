@@ -14,6 +14,7 @@ import { YouTubeUploadModal } from './components/YouTubeUploadModal';
 import { YouTubeAuthModal } from './components/YouTubeAuthModal';
 import { generateSampleHockeyClips } from './lib/sampleClips';
 import { exportCombinedVideo } from './lib/videoRenderer';
+import { loadBlobIntoMemory, bufferClipIntoMemory, ensureAllClipsLoaded } from './lib/videoLoader';
 import { initAuth, googleSignIn, logout, getAccessToken } from './lib/firebase';
 import { getMyYouTubeChannel } from './lib/youtube';
 import { saveProjectToStorage, loadProjectFromStorage, clearProjectFromStorage } from './lib/storage';
@@ -130,6 +131,16 @@ export default function App() {
         if (savedData) {
           if (savedData.clips && savedData.clips.length > 0) {
             setClips(savedData.clips);
+            savedData.clips.forEach(async (c) => {
+              try {
+                const ready = await bufferClipIntoMemory(c);
+                if (mounted) {
+                  setClips((curr) =>
+                    curr.map((item) => (item.id === ready.id ? { ...item, isLoaded: true, isBuffering: false } : item))
+                  );
+                }
+              } catch {}
+            });
           }
           if (savedData.transitions) setTransitions(savedData.transitions);
           if (savedData.overlaySettings) setOverlaySettings(savedData.overlaySettings);
@@ -183,7 +194,17 @@ export default function App() {
 
   // Helper to extract duration, thumbnail, and timestamp reliably from user video files
   const processVideoFile = async (file: File): Promise<VideoClip> => {
-    const url = URL.createObjectURL(file);
+    // Read file into memory RAM so browser doesn't have disk I/O stalls during playback
+    let memoryBlob: Blob = file;
+    let url = URL.createObjectURL(file);
+    try {
+      const res = await loadBlobIntoMemory(file);
+      memoryBlob = res.memoryBlob;
+      url = res.memoryUrl;
+    } catch (e) {
+      console.warn('Could not read blob into memory:', e);
+    }
+
     const { duration, thumbnailUrl, width, height } = await extractVideoMetadata(file);
     const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
 
@@ -204,7 +225,7 @@ export default function App() {
       id: `clip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: nameWithoutExt,
       url,
-      blob: file,
+      blob: memoryBlob,
       originalDuration: safeDuration,
       startTime: 0,
       endTime: safeDuration,
@@ -217,6 +238,8 @@ export default function App() {
       recordedAt: timeInfo.timestamp,
       recordedAtDisplay: timeInfo.display,
       hasFilenameTimestamp: timeInfo.isFromFilename,
+      isLoaded: false,
+      isBuffering: true,
     };
   };
 
@@ -266,6 +289,21 @@ export default function App() {
           return trans.slice(0, Math.max(0, updated.length - 1));
         });
         return updated;
+      });
+
+      // Asynchronously pre-buffer each newly added clip into browser memory
+      newClips.forEach(async (c) => {
+        try {
+          const bufferedClip = await bufferClipIntoMemory(c);
+          setClips((current) =>
+            current.map((item) => (item.id === bufferedClip.id ? { ...item, isLoaded: true, isBuffering: false } : item))
+          );
+        } catch (err) {
+          console.warn('Memory pre-buffering completed with warning:', err);
+          setClips((current) =>
+            current.map((item) => (item.id === c.id ? { ...item, isLoaded: true, isBuffering: false } : item))
+          );
+        }
       });
     }
   };
@@ -394,12 +432,33 @@ export default function App() {
     try {
       setIsExporting(true);
       setIsExportCompleted(false);
-      setExportProgress(5);
-      setExportStatusText('Analyzing source clips & preparing full-quality timeline...');
       setIsExportModalOpen(true);
 
+      // Check if any clip needs to be loaded into browser memory first to prevent export stutter
+      const unbufferedCount = clips.filter((c) => !c.isLoaded).length;
+      let renderClips = clips;
+
+      if (unbufferedCount > 0) {
+        setExportProgress(6);
+        setExportStatusText(
+          `Waiting for ${unbufferedCount} video ${unbufferedCount === 1 ? 'file' : 'files'} to fully load into memory (preventing playback stutter)...`,
+        );
+
+        // Wait until all clips are 100% loaded into memory
+        renderClips = await ensureAllClipsLoaded(clips, (percent, status) => {
+          setExportProgress(Math.round(percent * 0.16));
+          setExportStatusText(status);
+        });
+
+        // Update clips state so UI reflects loaded status
+        setClips(renderClips);
+      }
+
+      setExportProgress(18);
+      setExportStatusText('Preparing video assets and full-quality timeline...');
+
       const blob = await exportCombinedVideo(
-        clips,
+        renderClips,
         transitions,
         overlaySettings,
         aspectRatio,
@@ -485,6 +544,8 @@ export default function App() {
         onClearProject={handleClearProject}
         isExporting={isExporting}
         clipsCount={clips.length}
+        isBufferingClips={clips.some((c) => c.isBuffering || !c.isLoaded)}
+        unbufferedClipsCount={clips.filter((c) => !c.isLoaded).length}
       />
 
       {/* Main Studio Viewport - strictly fits 100% monitor viewport without vertical scrolling */}

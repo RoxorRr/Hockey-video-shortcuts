@@ -18,6 +18,7 @@ import {
   renderGoalHornBuffer,
   audioBufferToWav,
 } from './audio';
+import { loadBlobIntoMemory, waitForVideoReady } from './videoLoader';
 
 export interface RenderTimelineSegment {
   clipIndex: number;
@@ -695,7 +696,17 @@ export function drawHockeyOverlays(
  * Fast and reliable video preloading helper.
  * Safely handles local blob: URLs, data: URLs, and remote URLs without triggering CORS errors.
  */
-export function preloadVideo(url: string, blobFallback?: Blob): Promise<HTMLVideoElement> {
+/**
+ * Fast and reliable video preloading and memory buffering helper.
+ * Safely handles local blob: URLs, data: URLs, and remote URLs without triggering CORS errors.
+ * Ensures video data is fully loaded and buffered before playback/recording begins.
+ */
+export function preloadVideo(
+  url: string,
+  blobFallback?: Blob,
+  targetStartTime = 0,
+  targetEndTime?: number,
+): Promise<HTMLVideoElement> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
 
@@ -708,6 +719,8 @@ export function preloadVideo(url: string, blobFallback?: Blob): Promise<HTMLVide
     video.preload = 'auto';
     video.muted = true;
     video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
 
     // Attach temporarily to document body so sandboxed browser environments don't throttle decoder
     video.style.cssText =
@@ -720,10 +733,10 @@ export function preloadVideo(url: string, blobFallback?: Blob): Promise<HTMLVide
 
     const cleanup = () => {
       if (fallbackTimer) clearTimeout(fallbackTimer);
-      video.removeEventListener('loadedmetadata', onReady);
-      video.removeEventListener('loadeddata', onReady);
-      video.removeEventListener('canplay', onReady);
       video.removeEventListener('canplaythrough', onReady);
+      video.removeEventListener('canplay', checkBuffer);
+      video.removeEventListener('progress', checkBuffer);
+      video.removeEventListener('loadeddata', checkBuffer);
       video.removeEventListener('error', onError);
     };
 
@@ -732,6 +745,19 @@ export function preloadVideo(url: string, blobFallback?: Blob): Promise<HTMLVide
       hasResolved = true;
       cleanup();
       resolve(video);
+    };
+
+    const checkBuffer = () => {
+      // Must have enough data buffered (readyState >= 4) or canplaythrough fired
+      if (video.readyState >= 4) {
+        onReady();
+        return;
+      }
+      // If readyState is 3 and has decoded dimensions
+      if (video.readyState >= 3 && video.videoWidth > 0) {
+        onReady();
+        return;
+      }
     };
 
     const onError = () => {
@@ -752,8 +778,8 @@ export function preloadVideo(url: string, blobFallback?: Blob): Promise<HTMLVide
         }
       }
 
-      // If readyState is already >= 1, the video metadata actually loaded and frames can be decoded:
-      if (video.readyState >= 1 || video.videoWidth > 0) {
+      // If readyState is already >= 2, the video actually has decoded frames:
+      if (video.readyState >= 2 || video.videoWidth > 0) {
         onReady();
         return;
       }
@@ -765,10 +791,10 @@ export function preloadVideo(url: string, blobFallback?: Blob): Promise<HTMLVide
       reject(new Error(`Failed to load video${codeMsg}: ${url}`));
     };
 
-    video.addEventListener('loadedmetadata', onReady, { once: true });
-    video.addEventListener('loadeddata', onReady, { once: true });
-    video.addEventListener('canplay', onReady, { once: true });
     video.addEventListener('canplaythrough', onReady, { once: true });
+    video.addEventListener('canplay', checkBuffer);
+    video.addEventListener('progress', checkBuffer);
+    video.addEventListener('loadeddata', checkBuffer);
     video.addEventListener('error', onError);
 
     video.src = url;
@@ -776,15 +802,20 @@ export function preloadVideo(url: string, blobFallback?: Blob): Promise<HTMLVide
       video.load();
     } catch {}
 
-    if (video.readyState >= 1 || video.videoWidth > 0) {
-      onReady();
-      return;
-    }
+    // Initial buffer check
+    checkBuffer();
 
-    // Safety fallback timeout
+    // Use waitForVideoReady for enhanced buffer priming and verification
+    waitForVideoReady(video, targetStartTime, targetEndTime, 8000).then((isReady) => {
+      if (isReady && !hasResolved) {
+        onReady();
+      }
+    });
+
+    // Safety fallback timeout to prevent infinite hang on unusual files
     fallbackTimer = setTimeout(() => {
       if (!hasResolved) {
-        if (video.readyState >= 1 || video.videoWidth > 0) {
+        if (video.readyState >= 2 || video.videoWidth > 0) {
           onReady();
         } else if (blobFallback && !attemptedBlobFallback) {
           onError();
@@ -792,7 +823,7 @@ export function preloadVideo(url: string, blobFallback?: Blob): Promise<HTMLVide
           onReady();
         }
       }
-    }, 4000);
+    }, 8500);
   });
 }
 
@@ -804,10 +835,6 @@ export function primeVideo(video: HTMLVideoElement, targetTime: number): Promise
   return new Promise((resolve) => {
     video.pause();
     const clampedTime = Math.max(0, targetTime);
-    if (Math.abs(video.currentTime - clampedTime) < 0.05 && (video.readyState >= 2 || video.videoWidth > 0)) {
-      resolve();
-      return;
-    }
 
     let done = false;
     const finish = () => {
@@ -821,9 +848,20 @@ export function primeVideo(video: HTMLVideoElement, targetTime: number): Promise
 
     video.addEventListener('seeked', finish, { once: true });
     video.addEventListener('error', finish, { once: true });
-    const timer = setTimeout(finish, 1200);
+    const timer = setTimeout(finish, 1600);
 
     try {
+      // If already at target timestamp and readyState >= 3, verify frame decode
+      if (Math.abs(video.currentTime - clampedTime) < 0.04 && video.readyState >= 3) {
+        if (typeof (video as any).requestVideoFrameCallback === 'function') {
+          try {
+            (video as any).requestVideoFrameCallback(() => finish());
+            return;
+          } catch {}
+        }
+        finish();
+        return;
+      }
       video.currentTime = clampedTime;
     } catch {
       finish();
@@ -876,18 +914,20 @@ export async function exportCombinedVideo(
       `Loading clip ${i + 1} of ${clips.length}...`,
     );
 
-    // If clip has a blob, ensure we have an active, non-revoked object URL
+    // If clip has a blob, ensure we have an active, non-revoked object URL in browser RAM
     let activeUrl = clips[i].url;
     if (clips[i].blob instanceof Blob) {
       try {
-        activeUrl = URL.createObjectURL(clips[i].blob);
+        const { memoryUrl, memoryBlob } = await loadBlobIntoMemory(clips[i].blob);
+        activeUrl = memoryUrl;
         clips[i].url = activeUrl;
+        clips[i].blob = memoryBlob;
       } catch (e) {
         console.warn('Could not create object URL from blob:', e);
       }
     }
 
-    const video = await preloadVideo(activeUrl, clips[i].blob);
+    const video = await preloadVideo(activeUrl, clips[i].blob, clips[i].startTime, clips[i].endTime);
     // Unmute video so Web Audio can route its audio track into the recording stream.
     // Note: It connects solely to audioDest (the recorder) and NOT audioContext.destination (speakers),
     // so user's physical speakers remain completely silent while export records loud and clear!
@@ -1321,14 +1361,11 @@ export async function exportCombinedVideo(
     };
 
     const startExportExecution = async () => {
-      onProgress?.(18, 'Pre-buffering clip sequence...');
+      onProgress?.(18, 'Pre-buffering all clip sequences & warming hardware decoders...');
 
-      // Prime clip 0 to its exact start time before recording begins
-      await primeVideo(videoElements[0], clips[0].startTime);
-
-      // If there is a clip 1, start pre-priming it in the background
-      if (clips.length > 1) {
-        primeVideo(videoElements[1], clips[1].startTime);
+      // Prime EVERY clip to its exact start time before recording begins so no clip stutters upon start
+      for (let i = 0; i < videoElements.length; i++) {
+        await primeVideo(videoElements[i], clips[i].startTime);
       }
 
       // Render pristine initial frame onto canvas before starting recorder

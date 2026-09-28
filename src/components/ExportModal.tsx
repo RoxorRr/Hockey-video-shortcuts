@@ -141,9 +141,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               </div>
 
               <div>
-                <p className="text-sm font-semibold text-white mb-1">{statusMessage}</p>
+                <p className="text-sm font-semibold text-white mb-1 font-['Chakra_Petch'] tracking-wide">
+                  {statusMessage}
+                </p>
                 <p className="text-xs text-slate-400">
-                  Processing at 60 FPS with high-bitrate encoding to maintain original video clarity...
+                  {statusMessage.toLowerCase().includes('memory') || statusMessage.toLowerCase().includes('load') || progressPercent < 18
+                    ? 'Buffering video bytes into browser RAM & pre-warming decoders to eliminate playback stuttering...'
+                    : 'Recording video stream at fluid 60 FPS with full source quality...'}
                 </p>
               </div>
 

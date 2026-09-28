@@ -14,6 +14,7 @@ import {
   Plus,
   Check,
   Clapperboard,
+  Loader2,
 } from 'lucide-react';
 import type { User } from 'firebase/auth';
 import { playGoalHorn } from '../lib/audio';
@@ -30,6 +31,8 @@ interface NavbarProps {
   onClearProject?: () => void;
   isExporting: boolean;
   clipsCount: number;
+  isBufferingClips?: boolean;
+  unbufferedClipsCount?: number;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -44,6 +47,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onClearProject,
   isExporting,
   clipsCount,
+  isBufferingClips = false,
+  unbufferedClipsCount = 0,
 }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -248,13 +253,29 @@ export const Navbar: React.FC<NavbarProps> = ({
                   >
                     <div className="flex items-center gap-2.5">
                       <div className="w-7 h-7 rounded-lg bg-sky-950 border border-sky-800/80 text-sky-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        <Download className="w-4 h-4" />
+                        {isBufferingClips ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+                        ) : (
+                          <Download className="w-4 h-4" />
+                        )}
                       </div>
                       <div className="text-left">
-                        <div className="text-xs font-bold font-['Chakra_Petch'] tracking-wide">
-                          {isExporting ? 'Exporting Video...' : 'Export'}
+                        <div className="text-xs font-bold font-['Chakra_Petch'] tracking-wide flex items-center gap-1.5">
+                          {isExporting ? (
+                            'Exporting Video...'
+                          ) : isBufferingClips ? (
+                            <span className="text-amber-300">
+                              Buffering ({unbufferedClipsCount} in progress)...
+                            </span>
+                          ) : (
+                            'Export'
+                          )}
                         </div>
-                        <div className="text-[10px] text-slate-400">Render and download MP4 video</div>
+                        <div className="text-[10px] text-slate-400">
+                          {isBufferingClips
+                            ? 'Loads video into memory to eliminate stutter'
+                            : 'Render and download MP4 video'}
+                        </div>
                       </div>
                     </div>
                   </button>
@@ -373,8 +394,39 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         </div>
 
-        {/* Right Side: Account connection & Fullscreen toggle */}
+        {/* Right Side: Quick Export, Account connection & Fullscreen toggle */}
         <div className="flex items-center gap-2 justify-end">
+          {/* Direct Master Export Button */}
+          <button
+            id="nav-quick-export-btn"
+            type="button"
+            onClick={onExport}
+            disabled={clipsCount === 0 || isExporting}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow cursor-pointer select-none ${
+              isBufferingClips
+                ? 'bg-amber-500/90 hover:bg-amber-400 text-slate-950 font-black shadow-amber-950/40'
+                : 'bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white shadow-sky-950/40'
+            } disabled:opacity-40 disabled:cursor-not-allowed`}
+            title="Render and download master highlight video"
+          >
+            {isExporting ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span className="hidden sm:inline font-['Chakra_Petch']">Exporting...</span>
+              </>
+            ) : isBufferingClips ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-950" />
+                <span className="font-['Chakra_Petch']">Buffering ({unbufferedClipsCount})...</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-3.5 h-3.5" />
+                <span className="font-['Chakra_Petch'] tracking-wide">Export</span>
+              </>
+            )}
+          </button>
+
           {/* YouTube Auth Status */}
           {user ? (
             <div className="flex items-center gap-2 bg-slate-800/90 border border-slate-700 px-2.5 py-1.5 rounded-lg text-xs">

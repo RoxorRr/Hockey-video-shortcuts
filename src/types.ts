@@ -48,6 +48,9 @@ export interface VideoClip {
   recordedAt?: number; // Detected timestamp in epoch milliseconds
   recordedAtDisplay?: string; // Formatted display e.g. "2026-09-08 20:42:26"
   hasFilenameTimestamp?: boolean; // True if parsed from filename
+  // Memory loading and buffering state to prevent export stutter:
+  isLoaded?: boolean; // True once the video file is completely buffered into browser memory
+  isBuffering?: boolean; // True while the video is actively being buffered into memory
 }
 
 export interface GoalHornConfig {

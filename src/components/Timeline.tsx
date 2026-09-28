@@ -16,6 +16,7 @@ import {
   ZoomIn,
   Shield,
   Clock,
+  Loader2,
 } from 'lucide-react';
 import { playTransitionWhoosh } from '../lib/audio';
 
@@ -85,6 +86,16 @@ export const Timeline: React.FC<TimelineProps> = ({
             >
               <Clock className="w-2.5 h-2.5 text-amber-400" />
               Chronological (Oldest &rarr; Newest)
+            </span>
+          )}
+
+          {clips.some((c) => c.isBuffering || !c.isLoaded) && (
+            <span
+              className="hidden lg:inline-flex items-center gap-1 text-[10px] font-mono text-amber-300 bg-amber-950/70 border border-amber-700/60 px-2 py-0.5 rounded animate-pulse"
+              title="Buffering uploaded videos into memory to eliminate export stuttering"
+            >
+              <Loader2 className="w-2.5 h-2.5 animate-spin text-amber-400" />
+              Buffering video files into memory...
             </span>
           )}
         </div>
@@ -208,14 +219,32 @@ export const Timeline: React.FC<TimelineProps> = ({
                     {/* Clip Info */}
                     <div className="flex items-center justify-between mb-0.5">
                       <h4
-                        className="text-[11px] font-semibold text-white truncate max-w-[110px]"
+                        className="text-[11px] font-semibold text-white truncate max-w-[85px]"
                         title={clip.name}
                       >
                         {clip.name}
                       </h4>
-                      <span className="text-[9px] text-slate-400 font-mono">
-                        {clip.playbackRate !== 1 ? `${clip.playbackRate}x` : ''}
-                      </span>
+                      <div className="flex items-center gap-1">
+                        {clip.isBuffering ? (
+                          <span
+                            className="text-[8px] font-mono text-amber-400 bg-amber-950/80 border border-amber-700/60 px-1 py-0.2 rounded flex items-center gap-0.5 animate-pulse"
+                            title="Buffering into memory to eliminate stutter"
+                          >
+                            <Loader2 className="w-1.5 h-1.5 animate-spin" />
+                            RAM
+                          </span>
+                        ) : clip.isLoaded ? (
+                          <span
+                            className="text-[8px] font-mono text-emerald-400 bg-emerald-950/70 border border-emerald-800/60 px-1 py-0.2 rounded"
+                            title="100% loaded in browser memory"
+                          >
+                            ✓ RAM
+                          </span>
+                        ) : null}
+                        <span className="text-[9px] text-slate-400 font-mono">
+                          {clip.playbackRate !== 1 ? `${clip.playbackRate}x` : ''}
+                        </span>
+                      </div>
                     </div>
 
                     {/* Timestamp badge if detected from filename or metadata */}

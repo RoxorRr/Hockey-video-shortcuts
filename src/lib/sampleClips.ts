@@ -299,6 +299,8 @@ function createSyntheticHockeyVideo(
         playbackRate: 1,
         thumbnailUrl: thumbnailDataUrl,
         tag,
+        isLoaded: true,
+        isBuffering: false,
       });
     };
 
