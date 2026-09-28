@@ -1344,7 +1344,8 @@ export async function exportCombinedVideo(
       recorder.start(250);
 
       const renderStartTime = performance.now();
-      const audioStartTime = audioContext.currentTime;
+      let lastProgressTimestamp = performance.now();
+      let lastObservedTimelineTime = -1;
       let activeSegIndex = 0;
       let activeHornStopAt: number | null = null;
       const playedHornSegments = new Set<number>();
@@ -1374,8 +1375,9 @@ export async function exportCombinedVideo(
 
         // Allow final audio quantums and video frames to settle into recording chunks
         setTimeout(() => {
-          if (recorder.state === 'recording') {
+          if (recorder.state === 'recording' || recorder.state === 'paused') {
             try {
+              if (recorder.state === 'paused') recorder.resume();
               recorder.requestData();
             } catch {}
             recorder.stop();
@@ -1386,14 +1388,13 @@ export async function exportCombinedVideo(
       const renderLoop = () => {
         if (isFinishing) return;
 
-        // Accurate continuous master timeline clock derived from hardware AudioContext clock
-        const elapsedAudio = Math.max(0, audioContext.currentTime - audioStartTime);
-        const timelineTime = Math.min(totalDuration, elapsedAudio);
-
         const currentSeg = segments[activeSegIndex];
         const currentVideo = videoElements[activeSegIndex];
         const clip = currentSeg.clip;
         const r = clip.playbackRate || 1.0;
+        const clipStart = clip.startTime;
+        const clipEnd = clip.endTime;
+        const clipDurationSec = Math.max(0.1, (clipEnd - clipStart) / r);
 
         // Keep active video playing smoothly without interrupting hardware decoder
         if (currentVideo.paused && !currentVideo.ended) {
@@ -1404,26 +1405,34 @@ export async function exportCombinedVideo(
           });
         }
 
-        // Expected playback timestamp of current clip based on master clock:
-        const segLocalElapsed = Math.max(0, timelineTime - currentSeg.clipStartInTimeline);
-        const expectedVideoTime = Math.min(clip.endTime, clip.startTime + segLocalElapsed * r);
-
-        // Smooth drift correction without ANY hard seeks!
-        // On a 1GB file, calling video.currentTime = ... stalls the hardware decoder and causes severe stuttering.
-        // Instead, we gently steer playbackRate by ±3% to keep the video in seamless lockstep with master clock.
-        const drift = currentVideo.currentTime - expectedVideoTime;
-        if (Math.abs(drift) > 0.04) {
-          if (drift < 0) {
-            // Video is slightly behind master clock: smoothly speed up by 3%
-            currentVideo.playbackRate = r * 1.03;
-          } else {
-            // Video is slightly ahead: smoothly slow down by 3%
-            currentVideo.playbackRate = r * 0.97;
+        // Stall guard: If video is buffering or stalled, pause recorder to avoid encoding frozen frames
+        if (currentVideo.readyState < 2 || (currentVideo.paused && !currentVideo.ended)) {
+          if (recorder.state === 'recording') {
+            try {
+              recorder.pause();
+            } catch {}
           }
+          // Loop until video resumes decoding
+          animId = requestAnimationFrame(renderLoop);
+          return;
         } else {
-          if (currentVideo.playbackRate !== r) {
-            currentVideo.playbackRate = r;
+          if (recorder.state === 'paused') {
+            try {
+              recorder.resume();
+            } catch {}
           }
+        }
+
+        // Clip local playback progress derived from actual decoded video position
+        const currentClipPos = Math.max(clipStart, Math.min(clipEnd, currentVideo.currentTime));
+        const timeInClip = Math.max(0, Math.min(clipDurationSec, (currentClipPos - clipStart) / r));
+        const timelineTime = Math.min(totalDuration, currentSeg.clipStartInTimeline + timeInClip);
+        const timeRemainingInClip = Math.max(0, clipDurationSec - timeInClip);
+
+        // Track progress watchdog
+        if (timelineTime > lastObservedTimelineTime + 0.04) {
+          lastObservedTimelineTime = timelineTime;
+          lastProgressTimestamp = performance.now();
         }
 
         // PRE-ROLL UPCOMING CLIP:
@@ -1432,11 +1441,10 @@ export async function exportCombinedVideo(
         const nextIndex = activeSegIndex + 1;
         const trans = currentSeg.transitionWithNext;
         const hasNext = nextIndex < segments.length;
-        const timeRemainingInSeg = currentSeg.clipEndInTimeline - timelineTime;
 
         if (hasNext && !prestartedClips.has(nextIndex)) {
           const prestartThreshold = trans ? Math.max(0.6, trans.duration + 0.3) : 0.8;
-          if (timeRemainingInSeg <= prestartThreshold) {
+          if (timeRemainingInClip <= prestartThreshold) {
             prestartedClips.add(nextIndex);
             const nextVideo = videoElements[nextIndex];
             const nextClip = segments[nextIndex].clip;
@@ -1470,7 +1478,7 @@ export async function exportCombinedVideo(
         const isInTransition = Boolean(
           hasNext &&
           trans &&
-          timelineTime >= trans.startInTimeline,
+          timeRemainingInClip <= trans.duration,
         );
 
         if (isInTransition && trans && nextIndex < segments.length) {
@@ -1486,7 +1494,7 @@ export async function exportCombinedVideo(
             });
           }
 
-          const transProgress = Math.max(0, Math.min(1, (timelineTime - trans.startInTimeline) / trans.duration));
+          const transProgress = Math.max(0, Math.min(1, 1 - (timeRemainingInClip / trans.duration)));
 
           // Crossfade audio smoothly
           const clip1Vol = clip.volume ?? 1.0;
@@ -1641,12 +1649,15 @@ export async function exportCombinedVideo(
           }
         }
 
-        // Check if current segment is completed based on master timeline time
-        const segmentFinished = timelineTime >= currentSeg.clipEndInTimeline;
+        // Check if current segment is completed based on actual video playback
+        const isSegmentFinished =
+          currentVideo.ended ||
+          currentVideo.currentTime >= clipEnd - 0.05 ||
+          timeInClip >= clipDurationSec - 0.04;
 
-        if (segmentFinished) {
+        if (isSegmentFinished) {
           if (nextIndex < segments.length) {
-            // Hand off to next segment cleanly (which is already playing smoothly)
+            // Hand off to next segment cleanly (which was pre-warmed)
             currentVideo.pause();
             if (clipGainNodes[activeSegIndex]) {
               clipGainNodes[activeSegIndex]!.gain.value = 0;
@@ -1657,6 +1668,8 @@ export async function exportCombinedVideo(
             if (clipGainNodes[activeSegIndex]) {
               clipGainNodes[activeSegIndex]!.gain.value = nextClip.volume ?? 1.0;
             }
+            videoElements[activeSegIndex].playbackRate = nextClip.playbackRate || 1.0;
+            videoElements[activeSegIndex].play().catch(() => {});
 
             // Pre-prime subsequent clip (if one exists after next)
             if (activeSegIndex + 1 < videoElements.length) {
@@ -1672,8 +1685,9 @@ export async function exportCombinedVideo(
           }
         }
 
-        // Safety watchdog: prevent indefinite loop if browser tab throttles
-        if (timelineTime >= totalDuration || (performance.now() - renderStartTime) / 1000 > totalDuration + 5.0) {
+        // Safety watchdog: prevent indefinite loop if browser tab completely hangs
+        if (performance.now() - lastProgressTimestamp > 25000) {
+          console.warn('Watchdog triggered: export progress stalled for 25s, finalizing.');
           finishExport();
           return;
         }

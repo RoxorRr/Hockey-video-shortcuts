@@ -135,60 +135,26 @@ export function isRangeBuffered(
 }
 
 /**
- * Helper to seek a video element to a checkpoint and wait for buffer response.
- */
-function seekAndProbeBuffer(
-  video: HTMLVideoElement,
-  targetTime: number,
-  waitMs = 800,
-): Promise<void> {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      video.removeEventListener('seeked', finish);
-      video.removeEventListener('progress', finish);
-      clearTimeout(timer);
-      resolve();
-    };
-
-    video.addEventListener('seeked', finish, { once: true });
-    video.addEventListener('progress', finish);
-    const timer = setTimeout(finish, waitMs);
-
-    try {
-      video.currentTime = targetTime;
-    } catch {
-      finish();
-    }
-  });
-}
-
-/**
- * Wait for a video element to be fully loaded into memory, buffered across its playback window,
- * and verified with decoded frames in the GPU pipeline.
- * Uses multi-checkpoint sweeping so large 1GB+ files are buffered across the entire timeline duration
- * (including the second half of the clip) without stalling.
+ * Wait for a video element to be ready at targetStartTime with verified decoded frames.
+ * Does NOT perform random seeks that evict browser media pipeline buffer cache.
  */
 export function waitForVideoReady(
   video: HTMLVideoElement,
   targetStartTime = 0,
-  targetEndTime?: number,
-  timeoutMs = 18000,
+  _targetEndTime?: number,
+  timeoutMs = 10000,
   onBufferingProgress?: (status: string) => void,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     let hasResolved = false;
     let timer: any = null;
-    let isSweeping = false;
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
-      video.removeEventListener('canplaythrough', checkBufferState);
-      video.removeEventListener('canplay', checkBufferState);
-      video.removeEventListener('progress', checkBufferState);
-      video.removeEventListener('loadeddata', checkBufferState);
+      video.removeEventListener('canplaythrough', checkReady);
+      video.removeEventListener('canplay', checkReady);
+      video.removeEventListener('progress', checkReady);
+      video.removeEventListener('loadeddata', checkReady);
       video.removeEventListener('error', onError);
     };
 
@@ -201,18 +167,15 @@ export function waitForVideoReady(
 
     const confirmDecodedFrameAndFinish = () => {
       const clampedStart = Math.max(0, targetStartTime);
-      // Ensure video is at target start time
       if (Math.abs(video.currentTime - clampedStart) > 0.05) {
         try {
           video.currentTime = clampedStart;
           video.addEventListener(
             'seeked',
-            () => {
-              finish(true);
-            },
+            () => finish(true),
             { once: true },
           );
-          setTimeout(() => finish(true), 600);
+          setTimeout(() => finish(true), 500);
           return;
         } catch {
           finish(true);
@@ -220,13 +183,10 @@ export function waitForVideoReady(
         }
       }
 
-      // Check requestVideoFrameCallback for verified hardware frame decode
       if (typeof (video as any).requestVideoFrameCallback === 'function') {
         try {
-          (video as any).requestVideoFrameCallback(() => {
-            finish(true);
-          });
-          setTimeout(() => finish(true), 400);
+          (video as any).requestVideoFrameCallback(() => finish(true));
+          setTimeout(() => finish(true), 350);
           return;
         } catch {
           finish(true);
@@ -237,26 +197,13 @@ export function waitForVideoReady(
       finish(true);
     };
 
-    const checkBufferState = () => {
-      if (hasResolved || isSweeping) return;
-
-      const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 10;
-      const end = targetEndTime ?? Math.min(dur, targetStartTime + 4.0);
-      const isBuffered = isRangeBuffered(video, targetStartTime, end);
-      const coverage = getBufferCoveragePercent(video, targetStartTime, end);
-
-      if (coverage > 0 && onBufferingProgress) {
-        onBufferingProgress(`RAM Buffer: ${coverage}%`);
-      }
-
-      // Condition 1: Target range is completely buffered and readyState >= 3
-      if (isBuffered && video.readyState >= 3) {
+    const checkReady = () => {
+      if (hasResolved) return;
+      if (video.readyState >= 3 && video.videoWidth > 0) {
         confirmDecodedFrameAndFinish();
         return;
       }
-
-      // Condition 2: ReadyState is 4 (HAVE_ENOUGH_DATA) with valid dimensions and >= 85% coverage
-      if (video.readyState >= 4 && video.videoWidth > 0 && coverage >= 85) {
+      if (video.readyState >= 2 && video.videoWidth > 0) {
         confirmDecodedFrameAndFinish();
         return;
       }
@@ -270,79 +217,25 @@ export function waitForVideoReady(
       }
     };
 
-    video.addEventListener('canplaythrough', checkBufferState);
-    video.addEventListener('canplay', checkBufferState);
-    video.addEventListener('progress', checkBufferState);
-    video.addEventListener('loadeddata', checkBufferState);
+    video.addEventListener('canplaythrough', checkReady);
+    video.addEventListener('canplay', checkReady);
+    video.addEventListener('progress', checkReady);
+    video.addEventListener('loadeddata', checkReady);
     video.addEventListener('error', onError);
 
-    // Initial check
-    checkBufferState();
+    // Position video once at target start time
+    try {
+      video.currentTime = Math.max(0, targetStartTime);
+    } catch {}
+
+    checkReady();
     if (hasResolved) return;
 
-    // Multi-checkpoint sweep routine:
-    // Chromium media pipeline buffers in sliding windows (usually ~20-30s ahead).
-    // For 1GB files and long clips, the second half of the clip will stall if not pre-fetched.
-    // We sweep checkpoints through the clip duration to force Chromium to populate its buffer cache.
-    (async () => {
-      // Wait for initial metadata and readyState >= 1
-      let waitMeta = 0;
-      while (video.readyState < 1 && waitMeta < 30) {
-        await new Promise((r) => setTimeout(r, 100));
-        waitMeta++;
-        if (hasResolved) return;
-      }
+    onBufferingProgress?.('Priming hardware video decoder at clip start...');
 
-      const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 10;
-      const s = Math.max(0, targetStartTime);
-      const e = targetEndTime ? Math.min(dur, Math.max(s + 0.1, targetEndTime)) : Math.min(dur, s + 10);
-      const windowDuration = e - s;
-
-      if (windowDuration > 15) {
-        isSweeping = true;
-        // Build checkpoints across the clip range (e.g. 0%, 35%, 70%, 95%)
-        const checkpoints = [
-          s,
-          s + windowDuration * 0.35,
-          s + windowDuration * 0.7,
-          Math.max(s, e - 2.0),
-        ];
-
-        for (let i = 0; i < checkpoints.length; i++) {
-          if (hasResolved) break;
-          const cp = checkpoints[i];
-          const pct = Math.round(20 + (i / checkpoints.length) * 75);
-          onBufferingProgress?.(`Buffering video file into memory (${pct}%)...`);
-          await seekAndProbeBuffer(video, Math.min(dur, cp), 700);
-
-          const cov = getBufferCoveragePercent(video, s, e);
-          if (cov >= 95) break;
-        }
-
-        // Return to start time
-        onBufferingProgress?.('Priming hardware video decoder at clip start...');
-        await seekAndProbeBuffer(video, s, 800);
-        isSweeping = false;
-      }
-
-      // Check buffer state once sweep completes
-      checkBufferState();
-      if (!hasResolved) {
-        confirmDecodedFrameAndFinish();
-      }
-    })().catch(() => {
-      isSweeping = false;
-      confirmDecodedFrameAndFinish();
-    });
-
-    // Maximum safety timeout
     timer = setTimeout(() => {
       if (!hasResolved) {
-        if (video.readyState >= 2 || video.videoWidth > 0) {
-          finish(true);
-        } else {
-          finish(false);
-        }
+        finish(video.readyState >= 2 || video.videoWidth > 0);
       }
     }, timeoutMs);
   });
