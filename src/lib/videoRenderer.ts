@@ -1406,13 +1406,24 @@ export async function exportCombinedVideo(
 
         // Expected playback timestamp of current clip based on master clock:
         const segLocalElapsed = Math.max(0, timelineTime - currentSeg.clipStartInTimeline);
-        const expectedVideoTime = clip.startTime + segLocalElapsed * r;
+        const expectedVideoTime = Math.min(clip.endTime, clip.startTime + segLocalElapsed * r);
 
-        // Micro-sync to avoid drift without seek stutter
-        if (Math.abs(currentVideo.currentTime - expectedVideoTime) > 0.12 && !currentVideo.seeking) {
-          try {
-            currentVideo.currentTime = Math.min(clip.endTime, Math.max(clip.startTime, expectedVideoTime));
-          } catch {}
+        // Smooth drift correction without ANY hard seeks!
+        // On a 1GB file, calling video.currentTime = ... stalls the hardware decoder and causes severe stuttering.
+        // Instead, we gently steer playbackRate by ±3% to keep the video in seamless lockstep with master clock.
+        const drift = currentVideo.currentTime - expectedVideoTime;
+        if (Math.abs(drift) > 0.04) {
+          if (drift < 0) {
+            // Video is slightly behind master clock: smoothly speed up by 3%
+            currentVideo.playbackRate = r * 1.03;
+          } else {
+            // Video is slightly ahead: smoothly slow down by 3%
+            currentVideo.playbackRate = r * 0.97;
+          }
+        } else {
+          if (currentVideo.playbackRate !== r) {
+            currentVideo.playbackRate = r;
+          }
         }
 
         // PRE-ROLL UPCOMING CLIP:
