@@ -110,6 +110,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
 
     if (video.currentTime >= endTime) {
+      // Seamlessly advance to the next clip in timeline sequence so all videos play together
+      if (onSelectClipIndex && activeIndex !== null && activeIndex < clips.length - 1) {
+        onSelectClipIndex(activeIndex + 1);
+        return;
+      }
       video.pause();
       setIsPlaying(false);
       video.currentTime = startTime;
@@ -120,6 +125,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const elapsed = Math.max(0, (video.currentTime - startTime) / playbackRate);
     setCurrentPlayTime(elapsed);
   };
+
+  // Keep playing if user was already playing and advanced to next clip
+  useEffect(() => {
+    if (isPlaying && videoRef.current) {
+      videoRef.current.play().catch(() => {});
+      if (bgVideoRef.current) bgVideoRef.current.play().catch(() => {});
+    }
+  }, [activeIndex]);
 
   // Play / Pause toggle
   const togglePlayPause = () => {

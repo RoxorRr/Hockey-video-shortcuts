@@ -59,15 +59,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Active clip
+  // Active clip & merged preview
   const primaryClip = clips[0];
   const primaryBlob = primaryClip?.blob;
   const primaryUrl = primaryClip?.url || (primaryBlob ? URL.createObjectURL(primaryBlob) : '');
+  const mergedBlobUrl = exportedBlob ? URL.createObjectURL(exportedBlob) : '';
+  const effectivePreviewUrl = mergedBlobUrl || (clips.length === 1 ? primaryUrl : '');
 
   // Calculate file sizes
   const totalSourceSizeBytes = clips.reduce((acc, c) => acc + (c.blob?.size || 0), 0);
   const totalSourceSizeMB = (totalSourceSizeBytes / (1024 * 1024)).toFixed(1);
-  const primarySizeMB = primaryBlob ? (primaryBlob.size / (1024 * 1024)).toFixed(1) : totalSourceSizeMB;
+  const finalSizeMB = exportedBlob
+    ? (exportedBlob.size / (1024 * 1024)).toFixed(1)
+    : totalSourceSizeMB;
 
   // Inspect source clips to detect maximum native resolution
   const maxSourceW = Math.max(0, ...clips.map((c) => c.originalWidth || 0));
@@ -235,24 +239,40 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             /* Pristine Original Pass-Through View (Default & Recommended) */
             <div className="space-y-4">
               {/* Native Video Player Preview */}
-              {primaryUrl && (
-                <div
-                  className="rounded-xl overflow-hidden bg-black max-h-56 mx-auto border border-slate-800 shadow-inner flex items-center justify-center"
-                  style={{
-                    aspectRatio: aspectRatio === '9:16' ? '9 / 16' : aspectRatio === '1:1' ? '1 / 1' : '16 / 9',
-                    height: '100%',
-                    maxHeight: '220px',
-                    width: 'auto',
-                    maxWidth: '100%',
-                  }}
-                >
-                  <video
-                    src={primaryUrl}
-                    controls
-                    autoPlay={false}
-                    playsInline
-                    className="w-full h-full object-contain"
-                  />
+              {effectivePreviewUrl && (
+                <div className="space-y-1.5">
+                  {clips.length > 1 && (
+                    <div className="flex items-center justify-between text-xs px-1">
+                      <span className="font-bold text-emerald-400 font-['Chakra_Petch'] flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        {exportedBlob
+                          ? `ALL ${clips.length} VIDEOS MERGED TOGETHER (1 SINGLE FILE)`
+                          : `ALL ${clips.length} VIDEOS READY TO MERGE`}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {clips.length} Clips Combined
+                      </span>
+                    </div>
+                  )}
+                  <div
+                    className="rounded-xl overflow-hidden bg-black max-h-56 mx-auto border border-slate-800 shadow-inner flex items-center justify-center"
+                    style={{
+                      aspectRatio: aspectRatio === '9:16' ? '9 / 16' : aspectRatio === '1:1' ? '1 / 1' : '16 / 9',
+                      height: '100%',
+                      maxHeight: '220px',
+                      width: 'auto',
+                      maxWidth: '100%',
+                    }}
+                  >
+                    <video
+                      key={effectivePreviewUrl}
+                      src={effectivePreviewUrl}
+                      controls
+                      autoPlay={false}
+                      playsInline
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -262,11 +282,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                     <span className="text-xs font-bold text-emerald-200 uppercase tracking-wider font-['Chakra_Petch']">
-                      Original Pass-Through (Zero Quality Loss)
+                      {clips.length > 1
+                        ? `All ${clips.length} Videos Merged Together (1 File)`
+                        : 'Original Pass-Through (Zero Quality Loss)'}
                     </span>
                   </div>
                   <span className="text-[10px] font-mono text-emerald-400 font-bold bg-emerald-900/50 px-2 py-0.5 rounded">
-                    NO RE-ENCODING
+                    100% LOSSLESS
                   </span>
                 </div>
 
@@ -282,14 +304,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     <span className="font-bold text-white font-['Chakra_Petch']">100% Original</span>
                   </div>
                   <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-800/40">
-                    <span className="text-[10px] text-emerald-400 block font-semibold">FILE SIZE</span>
+                    <span className="text-[10px] text-emerald-400 block font-semibold">TOTAL SIZE</span>
                     <span className="font-bold text-white font-['Chakra_Petch']">
-                      {primarySizeMB} MB
+                      {finalSizeMB} MB
                     </span>
                   </div>
                   <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-800/40">
-                    <span className="text-[10px] text-emerald-400 block font-semibold">PROCESSING</span>
-                    <span className="font-bold text-emerald-300 font-['Chakra_Petch']">Instant (0s)</span>
+                    <span className="text-[10px] text-emerald-400 block font-semibold">CLIPS</span>
+                    <span className="font-bold text-emerald-300 font-['Chakra_Petch']">
+                      {clips.length > 1 ? `${clips.length} In 1 Video` : '1 Clip'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -305,8 +329,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <Download className="w-4 h-4 text-white" />
                   <span>
                     {clips.length > 1
-                      ? `Download Merged Video (All ${clips.length} Clips → 1 Video)`
-                      : `Download Video (${primarySizeMB} MB)`}
+                      ? `Download All ${clips.length} Videos Together in 1 Video`
+                      : `Download Video (${finalSizeMB} MB)`}
                   </span>
                 </button>
 
@@ -316,7 +340,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   type="button"
                   onClick={() => {
                     onClose();
-                    onProceedToYouTube(primaryBlob || exportedBlob || undefined);
+                    onProceedToYouTube(exportedBlob || primaryBlob || undefined);
                   }}
                   className="flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 text-white px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-red-950/50 font-['Chakra_Petch'] cursor-pointer"
                 >

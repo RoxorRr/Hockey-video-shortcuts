@@ -760,7 +760,7 @@ export default function App() {
           statusMessage={exportStatusText}
           isCompleted={isExportCompleted}
           isRendering={isExporting}
-          exportedBlob={exportedBlob || clips[0]?.blob || null}
+          exportedBlob={exportedBlob}
           onProceedToYouTube={(targetBlob) => {
             if (targetBlob) setExportedBlob(targetBlob);
             setIsUploadModalOpen(true);
