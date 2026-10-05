@@ -1,5 +1,19 @@
 import React, { useState } from 'react';
-import { X, Download, Upload, CheckCircle2, Loader2, Sparkles, Sliders, RefreshCw, Zap, Video } from 'lucide-react';
+import {
+  X,
+  Download,
+  Upload,
+  CheckCircle2,
+  Loader2,
+  Sparkles,
+  Sliders,
+  RefreshCw,
+  Video,
+  ShieldCheck,
+  AlertTriangle,
+  FolderDown,
+  Film,
+} from 'lucide-react';
 import { AspectRatio, ExportOptions, ExportQualityPreset, VideoClip } from '../types';
 
 interface ExportModalProps {
@@ -8,11 +22,14 @@ interface ExportModalProps {
   progressPercent: number;
   statusMessage: string;
   isCompleted: boolean;
+  isRendering?: boolean;
   exportedBlob: Blob | null;
-  onProceedToYouTube: () => void;
+  onProceedToYouTube: (targetBlob?: Blob) => void;
   exportOptions: ExportOptions;
   onUpdateOptions?: (opts: ExportOptions) => void;
   onReExport?: (opts: ExportOptions) => void;
+  onDownloadOriginal?: (clip?: VideoClip) => void;
+  onCancelRender?: () => void;
   clips?: VideoClip[];
   aspectRatio?: AspectRatio;
 }
@@ -23,56 +40,42 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   progressPercent,
   statusMessage,
   isCompleted,
+  isRendering = false,
   exportedBlob,
   onProceedToYouTube,
   exportOptions,
   onUpdateOptions,
   onReExport,
+  onDownloadOriginal,
+  onCancelRender,
   clips = [],
   aspectRatio = '16:9',
 }) => {
-  const [showSettings, setShowSettings] = useState(false);
+  const [showRenderOptions, setShowRenderOptions] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<ExportQualityPreset>(exportOptions.qualityPreset || 'source');
   const [selectedFps, setSelectedFps] = useState<60 | 30>(exportOptions.fps || 60);
 
   if (!isOpen) return null;
 
-  const downloadUrl = exportedBlob ? URL.createObjectURL(exportedBlob) : '';
+  // Active clip
+  const primaryClip = clips[0];
+  const primaryBlob = primaryClip?.blob;
+  const primaryUrl = primaryClip?.url || (primaryBlob ? URL.createObjectURL(primaryBlob) : '');
+
+  // Calculate file sizes
+  const totalSourceSizeBytes = clips.reduce((acc, c) => acc + (c.blob?.size || 0), 0);
+  const totalSourceSizeMB = (totalSourceSizeBytes / (1024 * 1024)).toFixed(1);
+  const primarySizeMB = primaryBlob ? (primaryBlob.size / (1024 * 1024)).toFixed(1) : totalSourceSizeMB;
 
   // Inspect source clips to detect maximum native resolution
   const maxSourceW = Math.max(0, ...clips.map((c) => c.originalWidth || 0));
   const maxSourceH = Math.max(0, ...clips.map((c) => c.originalHeight || 0));
   const hasSourceInfo = maxSourceW > 0 && maxSourceH > 0;
+  const nativeResolutionDisplay = hasSourceInfo
+    ? `${maxSourceW} × ${maxSourceH} (Native Camera)`
+    : '1080p Full HD (Native)';
 
-  // Calculate projected resolution based on preset and aspect ratio
-  const getProjectedRes = (preset: ExportQualityPreset) => {
-    if (preset === '4k') {
-      if (aspectRatio === '9:16') return '2160 × 3840 (4K Vertical)';
-      if (aspectRatio === '1:1') return '2160 × 2160 (4K Square)';
-      return '3840 × 2160 (4K Ultra HD)';
-    }
-    if (preset === '720p') {
-      if (aspectRatio === '9:16') return '720 × 1280 (720p)';
-      if (aspectRatio === '1:1') return '720 × 720 (Square)';
-      return '1280 × 720 (720p HD)';
-    }
-    if (preset === '1080p') {
-      if (aspectRatio === '9:16') return '1080 × 1920 (1080p Vertical)';
-      if (aspectRatio === '1:1') return '1080 × 1080 (1080p Square)';
-      return '1920 × 1080 (1080p Full HD)';
-    }
-    // 'source'
-    if (hasSourceInfo) {
-      if (aspectRatio === '9:16') {
-        const h = Math.max(1920, maxSourceH);
-        return `1080 × ${h} (Matched to Source)`;
-      }
-      return `${Math.max(1920, maxSourceW)} × ${Math.max(1080, maxSourceH)} (Matched to Source)`;
-    }
-    return '1920 × 1080 (Full HD Original)';
-  };
-
-  const handleApplyAndReRender = () => {
+  const handleStartRender = () => {
     const updated: ExportOptions = {
       ...exportOptions,
       qualityPreset: selectedPreset,
@@ -82,41 +85,82 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     onReExport?.(updated);
   };
 
+  const handleDownloadSingle = (clip: VideoClip) => {
+    if (onDownloadOriginal) {
+      onDownloadOriginal(clip);
+      return;
+    }
+
+    const filename = clip.name.includes('.')
+      ? clip.name
+      : `${clip.name}.${clip.blob?.type?.includes('webm') ? 'webm' : 'mp4'}`;
+
+    if (clip.blob) {
+      const url = URL.createObjectURL(clip.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } else if (clip.url) {
+      const a = document.createElement('a');
+      a.href = clip.url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  };
+
+  const handleDownloadAll = () => {
+    clips.forEach((clip, i) => {
+      setTimeout(() => {
+        handleDownloadSingle(clip);
+      }, i * 300);
+    });
+  };
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[92vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60 shrink-0">
-          <div className="flex items-center gap-2">
-            {isCompleted ? (
-              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/70 shrink-0">
+          <div className="flex items-center gap-2.5">
+            {isRendering ? (
+              <Loader2 className="w-5 h-5 text-amber-400 animate-spin" />
             ) : (
-              <Loader2 className="w-5 h-5 text-sky-400 animate-spin" />
+              <ShieldCheck className="w-5 h-5 text-emerald-400" />
             )}
             <div>
-              <h3 className="font-bold text-base text-white font-['Chakra_Petch'] tracking-wide">
-                {isCompleted ? 'ORIGINAL QUALITY EXPORT READY' : 'RENDERING HIGHLIGHT SEQUENCE'}
+              <h3 className="font-bold text-base text-white font-['Chakra_Petch'] tracking-wide flex items-center gap-2">
+                {isRendering ? 'RENDERING OVERLAYS...' : 'ORIGINAL UNTOUCHED VIDEO'}
+                {!isRendering && (
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700/60 uppercase">
+                    100% Quality
+                  </span>
+                )}
               </h3>
               <p className="text-[11px] text-slate-400">
-                {isCompleted
-                  ? 'Rendered at identical resolution & bitrate to source'
-                  : 'Stitching video frames and arena audio at full source fidelity'}
+                {isRendering
+                  ? 'Re-encoding canvas stream with burnt-in scoreboard overlays'
+                  : 'Zero re-encoding & zero compression — exact original video bit-for-bit'}
               </p>
             </div>
           </div>
-          {isCompleted && (
-            <button
-              onClick={onClose}
-              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          )}
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        <div className="p-6 space-y-5 overflow-y-auto">
-          {!isCompleted ? (
-            <div className="space-y-5 text-center py-2">
+        <div className="p-6 space-y-4 overflow-y-auto">
+          {/* Active Canvas Rendering View */}
+          {isRendering ? (
+            <div className="space-y-5 text-center py-4">
               <div className="relative w-24 h-24 mx-auto">
                 <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
                   <path
@@ -127,7 +171,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                   />
                   <path
-                    className="text-sky-500 transition-all duration-300 stroke-current"
+                    className="text-amber-500 transition-all duration-300 stroke-current"
                     strokeDasharray={`${progressPercent}, 100`}
                     strokeWidth="3"
                     strokeLinecap="round"
@@ -144,47 +188,35 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 <p className="text-sm font-semibold text-white mb-1 font-['Chakra_Petch'] tracking-wide">
                   {statusMessage}
                 </p>
-                <p className="text-xs text-slate-400">
-                  {statusMessage.toLowerCase().includes('memory') || statusMessage.toLowerCase().includes('load') || progressPercent < 18
-                    ? 'Buffering video bytes into browser RAM & pre-warming decoders to eliminate playback stuttering...'
-                    : 'Recording video stream at fluid 60 FPS with full source quality...'}
+                <p className="text-xs text-amber-300/80">
+                  Canvas re-encoding can take time on large files. You can cancel at any time to keep the pristine original.
                 </p>
               </div>
 
               {/* Progress Bar */}
               <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                 <div
-                  className="bg-gradient-to-r from-sky-500 to-red-500 h-full transition-all duration-300"
+                  className="bg-gradient-to-r from-amber-500 to-red-500 h-full transition-all duration-300"
                   style={{ width: `${progressPercent}%` }}
-                ></div>
+                />
               </div>
 
-              {/* Live Spec Badges */}
-              <div className="grid grid-cols-3 gap-2 pt-2 text-left">
-                <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-2.5">
-                  <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Resolution</div>
-                  <div className="text-xs font-bold text-sky-400 font-['Chakra_Petch']">
-                    {getProjectedRes(exportOptions.qualityPreset || 'source')}
-                  </div>
-                </div>
-                <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-2.5">
-                  <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Framerate</div>
-                  <div className="text-xs font-bold text-emerald-400 font-['Chakra_Petch']">
-                    {exportOptions.fps || 60} FPS (Fluid Motion)
-                  </div>
-                </div>
-                <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-2.5">
-                  <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Bitrate</div>
-                  <div className="text-xs font-bold text-amber-400 font-['Chakra_Petch']">
-                    28 - 45 Mbps High-Fi
-                  </div>
-                </div>
-              </div>
+              {/* Cancel Button */}
+              {onCancelRender && (
+                <button
+                  type="button"
+                  onClick={onCancelRender}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition cursor-pointer"
+                >
+                  Cancel &amp; Keep Original Video
+                </button>
+              )}
             </div>
           ) : (
+            /* Pristine Original Pass-Through View (Default & Recommended) */
             <div className="space-y-4">
-              {/* Preview Player */}
-              {downloadUrl && (
+              {/* Native Video Player Preview */}
+              {primaryUrl && (
                 <div
                   className="rounded-xl overflow-hidden bg-black max-h-56 mx-auto border border-slate-800 shadow-inner flex items-center justify-center"
                   style={{
@@ -196,9 +228,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   }}
                 >
                   <video
-                    src={downloadUrl}
+                    src={primaryUrl}
                     controls
-                    autoPlay
+                    autoPlay={false}
                     playsInline
                     className="w-full h-full object-contain"
                   />
@@ -206,91 +238,157 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               )}
 
               {/* Quality & Specifications Confirmation Banner */}
-              <div className="bg-emerald-950/50 border border-emerald-700/60 rounded-xl p-3.5 space-y-2">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span className="text-xs font-bold text-emerald-200 uppercase tracking-wider font-['Chakra_Petch']">
-                    Master Quality Output (Same As Original)
+              <div className="bg-emerald-950/60 border border-emerald-700/70 rounded-xl p-3.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="text-xs font-bold text-emerald-200 uppercase tracking-wider font-['Chakra_Petch']">
+                      Original Pass-Through (Zero Quality Loss)
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-400 font-bold bg-emerald-900/50 px-2 py-0.5 rounded">
+                    NO RE-ENCODING
                   </span>
                 </div>
+
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                   <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-800/40">
                     <span className="text-[10px] text-emerald-400 block font-semibold">RESOLUTION</span>
-                    <span className="font-bold text-white font-['Chakra_Petch']">{getProjectedRes(exportOptions.qualityPreset || 'source')}</span>
+                    <span className="font-bold text-white font-['Chakra_Petch'] truncate block">
+                      {nativeResolutionDisplay}
+                    </span>
                   </div>
                   <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-800/40">
-                    <span className="text-[10px] text-emerald-400 block font-semibold">FRAMERATE</span>
-                    <span className="font-bold text-white font-['Chakra_Petch']">{exportOptions.fps || 60} FPS</span>
+                    <span className="text-[10px] text-emerald-400 block font-semibold">BITRATE</span>
+                    <span className="font-bold text-white font-['Chakra_Petch']">100% Original</span>
                   </div>
                   <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-800/40">
                     <span className="text-[10px] text-emerald-400 block font-semibold">FILE SIZE</span>
                     <span className="font-bold text-white font-['Chakra_Petch']">
-                      {exportedBlob ? (exportedBlob.size / (1024 * 1024)).toFixed(1) : '0'} MB
+                      {primarySizeMB} MB
                     </span>
                   </div>
                   <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-800/40">
-                    <span className="text-[10px] text-emerald-400 block font-semibold">AUDIO TRACK</span>
-                    <span className="font-bold text-white font-['Chakra_Petch']">256 kbps Stereo</span>
+                    <span className="text-[10px] text-emerald-400 block font-semibold">PROCESSING</span>
+                    <span className="font-bold text-emerald-300 font-['Chakra_Petch']">Instant (0s)</span>
                   </div>
                 </div>
               </div>
 
-              {/* Actions */}
+              {/* Main Actions */}
               <div className="flex flex-col sm:flex-row gap-3 pt-1">
-                <a
-                  href={downloadUrl}
-                  download={exportedBlob?.type.includes('mp4') ? 'hockey_master_highlights.mp4' : 'hockey_master_highlights.webm'}
-                  className="flex-1 flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition border border-slate-700 shadow"
+                {/* Download Original Video Button */}
+                <button
+                  type="button"
+                  onClick={() => handleDownloadSingle(primaryClip || clips[0])}
+                  className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-emerald-950/50 cursor-pointer font-['Chakra_Petch']"
                 >
-                  <Download className="w-4 h-4 text-sky-400" />
-                  Download Master Video
-                </a>
+                  <Download className="w-4 h-4 text-white" />
+                  <span>Download Original Video ({primarySizeMB} MB)</span>
+                </button>
 
+                {/* Upload to YouTube Button */}
                 <button
                   id="export-to-youtube-btn"
+                  type="button"
                   onClick={() => {
                     onClose();
-                    onProceedToYouTube();
+                    onProceedToYouTube(primaryBlob || exportedBlob || undefined);
                   }}
-                  className="flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-red-950/50 font-['Chakra_Petch']"
+                  className="flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 text-white px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-red-950/50 font-['Chakra_Petch'] cursor-pointer"
                 >
                   <Upload className="w-4 h-4" />
-                  Upload to YouTube
+                  <span>Upload Original to YouTube</span>
                 </button>
               </div>
 
-              {/* Quality Preset Customizer (Toggle) */}
-              <div className="border-t border-slate-800 pt-3">
+              {/* Multiple Clips Download Options if more than 1 clip on timeline */}
+              {clips.length > 1 && (
+                <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider font-['Chakra_Petch'] flex items-center gap-1.5">
+                      <Film className="w-3.5 h-3.5 text-sky-400" />
+                      Individual Original Video Clips ({clips.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleDownloadAll}
+                      className="text-[10px] text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <FolderDown className="w-3 h-3" />
+                      Download All ({totalSourceSizeMB} MB)
+                    </button>
+                  </div>
+
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                    {clips.map((clip, idx) => (
+                      <div
+                        key={clip.id || idx}
+                        className="flex items-center justify-between bg-slate-900/90 px-2.5 py-1.5 rounded-lg border border-slate-800 text-xs"
+                      >
+                        <div className="truncate max-w-[240px]">
+                          <span className="font-semibold text-white truncate block">{clip.name}</span>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {clip.blob ? `${(clip.blob.size / (1024 * 1024)).toFixed(1)} MB` : ''} •{' '}
+                            {clip.originalDuration.toFixed(1)}s
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadSingle(clip)}
+                          className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 rounded text-[11px] font-bold transition cursor-pointer"
+                        >
+                          <Download className="w-3 h-3" />
+                          <span>Download</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Optional Canvas Re-encode Section (Secondary & Opt-in) */}
+              <div className="border-t border-slate-800/80 pt-3">
                 <button
                   type="button"
-                  onClick={() => setShowSettings(!showSettings)}
-                  className="w-full flex items-center justify-between text-xs text-slate-400 hover:text-slate-200 transition py-1"
+                  onClick={() => setShowRenderOptions(!showRenderOptions)}
+                  className="w-full flex items-center justify-between text-xs text-slate-400 hover:text-slate-200 transition py-1 cursor-pointer"
                 >
                   <span className="flex items-center gap-1.5 font-medium">
-                    <Sliders className="w-3.5 h-3.5 text-sky-400" />
-                    Re-render with customized resolution / framerate?
+                    <Sliders className="w-3.5 h-3.5 text-slate-400" />
+                    Optional: Burn in animated scoreboard overlays &amp; horns?
                   </span>
-                  <span className="text-[11px] text-sky-400">{showSettings ? 'Hide Options ▲' : 'Show Options ▼'}</span>
+                  <span className="text-[11px] text-sky-400 font-semibold">
+                    {showRenderOptions ? 'Hide Options ▲' : 'Show Options ▼'}
+                  </span>
                 </button>
 
-                {showSettings && (
-                  <div className="mt-3 p-4 bg-slate-950/70 border border-slate-800 rounded-xl space-y-4 animate-in fade-in duration-150">
+                {showRenderOptions && (
+                  <div className="mt-3 p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-3.5 animate-in fade-in duration-150">
+                    <div className="flex items-start gap-2 bg-amber-950/40 border border-amber-800/50 rounded-lg p-2.5 text-xs text-amber-300/90">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold block">Re-encoding Notice</span>
+                        Burning in graphic overlays requires browser canvas re-encoding. For large 1 GB+ files, this takes extra time and can compress video quality compared to downloading the pristine original above.
+                      </div>
+                    </div>
+
                     <div>
                       <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-                        Export Resolution Preset
+                        Render Resolution
                       </label>
                       <div className="grid grid-cols-2 gap-2">
                         {[
-                          { id: 'source', label: 'Original Source Quality', sub: 'Matches native clip dimensions' },
-                          { id: '4k', label: '4K Ultra HD', sub: '3840 × 2160 (Max clarity)' },
-                          { id: '1080p', label: '1080p Full HD', sub: '1920 × 1080 (Standard HD)' },
-                          { id: '720p', label: '720p HD', sub: '1280 × 720 (Fast render)' },
+                          { id: 'source', label: 'Match Source', sub: 'Native dimensions' },
+                          { id: '1080p', label: '1080p Full HD', sub: '1920 × 1080' },
+                          { id: '4k', label: '4K Ultra HD', sub: '3840 × 2160' },
+                          { id: '720p', label: '720p HD', sub: 'Fast 1280 × 720' },
                         ].map((item) => (
                           <button
                             key={item.id}
                             type="button"
                             onClick={() => setSelectedPreset(item.id as ExportQualityPreset)}
-                            className={`text-left p-2.5 rounded-lg border text-xs transition ${
+                            className={`text-left p-2 rounded-lg border text-xs transition cursor-pointer ${
                               selectedPreset === item.id
                                 ? 'bg-sky-500/20 border-sky-500 text-white'
                                 : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-850'
@@ -303,43 +401,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                       </div>
                     </div>
 
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-                        Frame Rate
-                      </label>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedFps(60)}
-                          className={`flex-1 p-2 rounded-lg border text-xs font-bold transition ${
-                            selectedFps === 60
-                              ? 'bg-sky-500/20 border-sky-500 text-white'
-                              : 'bg-slate-900 border-slate-800 text-slate-400'
-                          }`}
-                        >
-                          60 FPS (Ultra Smooth)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedFps(30)}
-                          className={`flex-1 p-2 rounded-lg border text-xs font-bold transition ${
-                            selectedFps === 30
-                              ? 'bg-sky-500/20 border-sky-500 text-white'
-                              : 'bg-slate-900 border-slate-800 text-slate-400'
-                          }`}
-                        >
-                          30 FPS (Compact)
-                        </button>
-                      </div>
-                    </div>
-
                     <button
                       type="button"
-                      onClick={handleApplyAndReRender}
-                      className="w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-500 text-white py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition font-['Chakra_Petch']"
+                      onClick={handleStartRender}
+                      className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-amber-200 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition font-['Chakra_Petch'] border border-amber-800/60 cursor-pointer"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
-                      Re-render Video in {selectedPreset.toUpperCase()}
+                      Start Canvas Re-encode with Overlays
                     </button>
                   </div>
                 )}

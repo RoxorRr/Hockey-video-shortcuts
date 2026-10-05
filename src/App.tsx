@@ -423,8 +423,47 @@ export default function App() {
     setSelectedClipIndex(index);
   };
 
-  // Export Combined Video Sequence with Original Source Quality
-  const handleExport = async (overrideOptions?: ExportOptions): Promise<Blob | null> => {
+  // Download untouched original video (0-second instant download, 100% native quality, zero re-rendering)
+  const handleDownloadOriginal = (targetClip?: VideoClip) => {
+    const clip = targetClip || clips[0];
+    if (!clip) return;
+
+    let filename = clip.name || 'original-video';
+    if (!filename.includes('.')) {
+      const mime = clip.blob?.type || '';
+      const ext = mime.includes('webm') ? 'webm' : mime.includes('quicktime') ? 'mov' : 'mp4';
+      filename = `${filename}.${ext}`;
+    }
+
+    if (clip.blob) {
+      const url = URL.createObjectURL(clip.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+    } else if (clip.url) {
+      const a = document.createElement('a');
+      a.href = clip.url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  };
+
+  // Open Export / Save Modal with original untouched video (NO auto-rendering)
+  const handleOpenExportModal = () => {
+    if (clips.length === 0) return;
+    setIsExporting(false);
+    setIsExportCompleted(true);
+    setIsExportModalOpen(true);
+  };
+
+  // Optional manual re-render with overlays (strictly opt-in, only if user explicitly clicks render in options)
+  const handleStartCanvasRender = async (overrideOptions?: ExportOptions): Promise<Blob | null> => {
     if (clips.length === 0) return null;
 
     const activeOptions = overrideOptions || exportOptions;
@@ -471,12 +510,17 @@ export default function App() {
     }
   };
 
-  // Direct YouTube Upload action
-  const handleOpenUpload = async () => {
-    // If no exported blob yet or 0 MB, export first!
-    if (!exportedBlob || exportedBlob.size === 0) {
-      const freshBlob = await handleExport();
-      if (!freshBlob || freshBlob.size === 0) return;
+  const handleCancelRender = () => {
+    setIsExporting(false);
+    setExportStatusText('Cancelled render — original video preserved.');
+  };
+
+  // Direct YouTube Upload action (uses untouched original video)
+  const handleOpenUpload = () => {
+    if (clips.length === 0) return;
+    const originalBlob = clips[0]?.blob || exportedBlob || null;
+    if (originalBlob) {
+      setExportedBlob(originalBlob);
     }
     setIsUploadModalOpen(true);
   };
@@ -529,7 +573,8 @@ export default function App() {
         channelTitle={channelTitle}
         onSignIn={() => setIsAuthModalOpen(true)}
         onSignOut={handleSignOut}
-        onExport={handleExport}
+        onDownloadOriginal={() => handleDownloadOriginal()}
+        onExport={handleOpenExportModal}
         onOpenUpload={handleOpenUpload}
         onClearProject={handleClearProject}
         isExporting={isExporting}
@@ -600,11 +645,12 @@ export default function App() {
             onSelectClipForEdit={handleSelectClipForEdit}
             selectedClipIndex={selectedClipIndex}
             onSortChronological={handleSortChronological}
+            onDownloadOriginalClip={handleDownloadOriginal}
           />
         </div>
       </main>
 
-      {/* Export / Render Progress Modal */}
+      {/* Export / Save Modal */}
       {isExportModalOpen && (
         <ExportModal
           isOpen={isExportModalOpen}
@@ -612,11 +658,17 @@ export default function App() {
           progressPercent={exportProgress}
           statusMessage={exportStatusText}
           isCompleted={isExportCompleted}
-          exportedBlob={exportedBlob}
-          onProceedToYouTube={() => setIsUploadModalOpen(true)}
+          isRendering={isExporting}
+          exportedBlob={exportedBlob || clips[0]?.blob || null}
+          onProceedToYouTube={(targetBlob) => {
+            if (targetBlob) setExportedBlob(targetBlob);
+            setIsUploadModalOpen(true);
+          }}
           exportOptions={exportOptions}
           onUpdateOptions={(opts) => setExportOptions(opts)}
-          onReExport={(opts) => handleExport(opts)}
+          onReExport={(opts) => handleStartCanvasRender(opts)}
+          onDownloadOriginal={handleDownloadOriginal}
+          onCancelRender={handleCancelRender}
           clips={clips}
           aspectRatio={aspectRatio}
         />

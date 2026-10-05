@@ -17,6 +17,7 @@ import {
   Shield,
   Clock,
   Loader2,
+  Download,
 } from 'lucide-react';
 import { playTransitionWhoosh } from '../lib/audio';
 
@@ -32,6 +33,7 @@ interface TimelineProps {
   onSelectClipForEdit: (clip: VideoClip, index: number) => void;
   selectedClipIndex: number | null;
   onSortChronological?: () => void;
+  onDownloadOriginalClip?: (clip: VideoClip) => void;
 }
 
 const TRANSITION_OPTIONS: { type: TransitionType; label: string; icon: React.ReactNode; desc: string }[] = [
@@ -55,6 +57,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onSelectClipForEdit,
   selectedClipIndex,
   onSortChronological,
+  onDownloadOriginalClip,
 }) => {
   const [activeTransitionModalIndex, setActiveTransitionModalIndex] = useState<number | null>(null);
 
@@ -101,6 +104,32 @@ export const Timeline: React.FC<TimelineProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {clips.length > 0 && onDownloadOriginalClip && (
+            <button
+              id="timeline-download-original-btn"
+              type="button"
+              onClick={() => {
+                if (clips.length === 1) {
+                  onDownloadOriginalClip(clips[0]);
+                } else {
+                  clips.forEach((c, idx) => {
+                    setTimeout(() => onDownloadOriginalClip(c), idx * 300);
+                  });
+                }
+              }}
+              title="Download untouched original video (100% Quality • Zero re-encoding • Bit-for-bit)"
+              className="flex items-center gap-1 bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 hover:text-emerald-200 px-2 py-1 rounded text-xs font-semibold border border-emerald-700/60 transition shadow-xs cursor-pointer"
+            >
+              <Download className="w-3 h-3 text-emerald-400" />
+              <span className="hidden sm:inline">
+                {clips.length === 1 ? 'Download Original' : 'Download All Originals'}
+              </span>
+              <span className="text-[10px] text-emerald-400/80 font-mono hidden md:inline">
+                (100% Quality)
+              </span>
+            </button>
+          )}
+
           {clips.length > 1 && onSortChronological && (
             <button
               id="timeline-sort-chronological-btn"
@@ -303,6 +332,20 @@ export const Timeline: React.FC<TimelineProps> = ({
                       </div>
 
                       <div className="flex items-center gap-0.5">
+                        {onDownloadOriginalClip && (
+                          <button
+                            id={`download-clip-btn-${index}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDownloadOriginalClip(clip);
+                            }}
+                            title="Download untouched original video (100% native quality • no re-encoding)"
+                            className="p-0.5 text-slate-400 hover:text-emerald-400 rounded hover:bg-slate-800 transition cursor-pointer"
+                          >
+                            <Download className="w-3 h-3" />
+                          </button>
+                        )}
+
                         <button
                           id={`edit-clip-btn-${index}`}
                           onClick={(e) => {
