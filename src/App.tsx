@@ -434,15 +434,25 @@ export default function App() {
       setIsExportCompleted(false);
       setIsExportModalOpen(true);
 
-      // Guarantee that all video files are fully loaded and buffered into memory before recording
-      setExportProgress(6);
-      setExportStatusText('Loading video files into browser memory to eliminate export stutter...');
+      // Check if any clip needs to be loaded into browser memory first to prevent export stutter
+      const unbufferedCount = clips.filter((c) => !c.isLoaded).length;
+      let renderClips = clips;
 
-      const renderClips = await ensureAllClipsLoaded(clips, (percent, status) => {
-        setExportProgress(Math.min(18, Math.max(6, Math.round(6 + (percent / 100) * 12))));
-        setExportStatusText(status);
-      });
-      setClips(renderClips);
+      if (unbufferedCount > 0) {
+        setExportProgress(6);
+        setExportStatusText(
+          `Waiting for ${unbufferedCount} video ${unbufferedCount === 1 ? 'file' : 'files'} to fully load into memory (preventing playback stutter)...`,
+        );
+
+        // Wait until all clips are 100% loaded into memory
+        renderClips = await ensureAllClipsLoaded(clips, (percent, status) => {
+          setExportProgress(Math.round(percent * 0.16));
+          setExportStatusText(status);
+        });
+
+        // Update clips state so UI reflects loaded status
+        setClips(renderClips);
+      }
 
       setExportProgress(18);
       setExportStatusText('Preparing video assets and full-quality timeline...');

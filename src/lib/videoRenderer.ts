@@ -18,12 +18,7 @@ import {
   renderGoalHornBuffer,
   audioBufferToWav,
 } from './audio';
-import {
-  loadBlobIntoMemory,
-  waitForVideoReady,
-  getPrebufferedVideo,
-  preloadAndBufferVideoElement,
-} from './videoLoader';
+import { loadBlobIntoMemory, waitForVideoReady } from './videoLoader';
 
 export interface RenderTimelineSegment {
   clipIndex: number;
@@ -703,57 +698,132 @@ export function drawHockeyOverlays(
  */
 /**
  * Fast and reliable video preloading and memory buffering helper.
- * Reuses already pre-buffered HTMLVideoElement instances whenever available.
+ * Safely handles local blob: URLs, data: URLs, and remote URLs without triggering CORS errors.
  * Ensures video data is fully loaded and buffered before playback/recording begins.
  */
-export async function preloadVideo(
+export function preloadVideo(
   url: string,
   blobFallback?: Blob,
   targetStartTime = 0,
   targetEndTime?: number,
-  clipId?: string,
 ): Promise<HTMLVideoElement> {
-  // If clipId is supplied, check if it's already pre-buffered and ready in memory!
-  if (clipId) {
-    const cached = getPrebufferedVideo(clipId);
-    if (cached && (cached.readyState >= 3 || cached.videoWidth > 0)) {
-      try {
-        await primeVideo(cached, targetStartTime);
-      } catch {}
-      return cached;
-    }
-  }
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
 
-  return preloadAndBufferVideoElement(url, blobFallback, targetStartTime, targetEndTime, clipId);
-}
-
-/**
- * Start video playback and wait for active decoded frames before recording begins.
- * Eliminates the initial freeze and startup stutter during export.
- */
-export function startVideoPlaybackWarm(video: HTMLVideoElement): Promise<void> {
-  return new Promise((resolve) => {
-    if (!video.paused && video.currentTime > 0) {
-      resolve();
-      return;
+    // CRITICAL: NEVER set crossOrigin for blob: or data: URLs!
+    // In Chromium and WebKit browsers, setting crossOrigin on a blob: URI triggers an immediate CORS/security error.
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      video.crossOrigin = 'anonymous';
     }
-    let resolved = false;
-    const finish = () => {
-      if (resolved) return;
-      resolved = true;
-      video.removeEventListener('playing', finish);
-      video.removeEventListener('timeupdate', finish);
-      clearTimeout(timer);
-      resolve();
+
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+
+    // Attach temporarily to document body so sandboxed browser environments don't throttle decoder
+    video.style.cssText =
+      'position:fixed;top:-9999px;left:-9999px;width:2px;height:2px;opacity:0.001;pointer-events:none;z-index:-999;';
+    document.body.appendChild(video);
+
+    let hasResolved = false;
+    let fallbackTimer: any = null;
+    let attemptedBlobFallback = false;
+
+    const cleanup = () => {
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      video.removeEventListener('canplaythrough', onReady);
+      video.removeEventListener('canplay', checkBuffer);
+      video.removeEventListener('progress', checkBuffer);
+      video.removeEventListener('loadeddata', checkBuffer);
+      video.removeEventListener('error', onError);
     };
 
-    video.addEventListener('playing', finish, { once: true });
-    video.addEventListener('timeupdate', finish, { once: true });
-    const timer = setTimeout(finish, 500);
+    const onReady = () => {
+      if (hasResolved) return;
+      hasResolved = true;
+      cleanup();
+      resolve(video);
+    };
 
-    video.play().catch(() => {
-      finish();
+    const checkBuffer = () => {
+      // Must have enough data buffered (readyState >= 4) or canplaythrough fired
+      if (video.readyState >= 4) {
+        onReady();
+        return;
+      }
+      // If readyState is 3 and has decoded dimensions
+      if (video.readyState >= 3 && video.videoWidth > 0) {
+        onReady();
+        return;
+      }
+    };
+
+    const onError = () => {
+      if (hasResolved) return;
+      const mediaErr = video.error;
+
+      // If we have a blob fallback available and haven't tried recreating the URL yet, retry with fresh object URL:
+      if (blobFallback && !attemptedBlobFallback) {
+        attemptedBlobFallback = true;
+        try {
+          const freshUrl = URL.createObjectURL(blobFallback);
+          video.removeAttribute('crossorigin');
+          video.src = freshUrl;
+          video.load();
+          return;
+        } catch (e) {
+          console.warn('Failed to retry with blobFallback:', e);
+        }
+      }
+
+      // If readyState is already >= 2, the video actually has decoded frames:
+      if (video.readyState >= 2 || video.videoWidth > 0) {
+        onReady();
+        return;
+      }
+
+      cleanup();
+      const codeMsg = mediaErr
+        ? ` (error code ${mediaErr.code}: ${mediaErr.message || 'Media decode or unsupported format'})`
+        : '';
+      reject(new Error(`Failed to load video${codeMsg}: ${url}`));
+    };
+
+    video.addEventListener('canplaythrough', onReady, { once: true });
+    video.addEventListener('canplay', checkBuffer);
+    video.addEventListener('progress', checkBuffer);
+    video.addEventListener('loadeddata', checkBuffer);
+    video.addEventListener('error', onError);
+
+    video.src = url;
+    try {
+      video.load();
+    } catch {}
+
+    // Initial buffer check
+    checkBuffer();
+
+    // Use waitForVideoReady for enhanced buffer priming and verification
+    waitForVideoReady(video, targetStartTime, targetEndTime, 8000).then((isReady) => {
+      if (isReady && !hasResolved) {
+        onReady();
+      }
     });
+
+    // Safety fallback timeout to prevent infinite hang on unusual files
+    fallbackTimer = setTimeout(() => {
+      if (!hasResolved) {
+        if (video.readyState >= 2 || video.videoWidth > 0) {
+          onReady();
+        } else if (blobFallback && !attemptedBlobFallback) {
+          onError();
+        } else {
+          onReady();
+        }
+      }
+    }, 8500);
   });
 }
 
@@ -857,13 +927,7 @@ export async function exportCombinedVideo(
       }
     }
 
-    const video = await preloadVideo(
-      activeUrl,
-      clips[i].blob,
-      clips[i].startTime,
-      clips[i].endTime,
-      clips[i].id,
-    );
+    const video = await preloadVideo(activeUrl, clips[i].blob, clips[i].startTime, clips[i].endTime);
     // Unmute video so Web Audio can route its audio track into the recording stream.
     // Note: It connects solely to audioDest (the recorder) and NOT audioContext.destination (speakers),
     // so user's physical speakers remain completely silent while export records loud and clear!
@@ -1304,17 +1368,6 @@ export async function exportCombinedVideo(
         await primeVideo(videoElements[i], clips[i].startTime);
       }
 
-      // Activate initial clip audio gain
-      if (clipGainNodes[0]) {
-        clipGainNodes[0]!.gain.value = clips[0].volume ?? 1.0;
-      }
-      videoElements[0].playbackRate = clips[0].playbackRate || 1.0;
-
-      // PRE-ROLL CLIP 0:
-      // Start playback and wait until the video element is genuinely rolling and emitting frames!
-      // This completely eliminates the 200-400ms startup freeze in the exported video!
-      await startVideoPlaybackWarm(videoElements[0]);
-
       // Render pristine initial frame onto canvas before starting recorder
       ctx.fillStyle = '#090d16';
       ctx.fillRect(0, 0, width, height);
@@ -1330,6 +1383,9 @@ export async function exportCombinedVideo(
       );
       drawHockeyOverlays(ctx, overlaySettings, clips[0], width, height, isShorts);
 
+      // Start recording
+      recorder.start(250);
+
       // Start background music playback synchronously with recording
       if (musicAudioEl) {
         try {
@@ -1340,17 +1396,21 @@ export async function exportCombinedVideo(
         } catch {}
       }
 
-      // Start recording NOW with video already in motion
-      recorder.start(250);
+      // Activate initial clip audio and start video playback
+      if (clipGainNodes[0]) {
+        clipGainNodes[0]!.gain.value = clips[0].volume ?? 1.0;
+      }
+      videoElements[0].playbackRate = clips[0].playbackRate || 1.0;
+      videoElements[0].play().catch(() => {
+        videoElements[0].muted = true;
+        videoElements[0].play().catch(() => {});
+      });
 
       const renderStartTime = performance.now();
-      let lastProgressTimestamp = performance.now();
-      let lastObservedTimelineTime = -1;
       let activeSegIndex = 0;
       let activeHornStopAt: number | null = null;
       const playedHornSegments = new Set<number>();
       const playedTransitionSounds = new Set<number>();
-      const prestartedClips = new Set<number>([0]);
       let animId: number;
       let isFinishing = false;
 
@@ -1375,9 +1435,8 @@ export async function exportCombinedVideo(
 
         // Allow final audio quantums and video frames to settle into recording chunks
         setTimeout(() => {
-          if (recorder.state === 'recording' || recorder.state === 'paused') {
+          if (recorder.state === 'recording') {
             try {
-              if (recorder.state === 'paused') recorder.resume();
               recorder.requestData();
             } catch {}
             recorder.stop();
@@ -1392,9 +1451,6 @@ export async function exportCombinedVideo(
         const currentVideo = videoElements[activeSegIndex];
         const clip = currentSeg.clip;
         const r = clip.playbackRate || 1.0;
-        const clipStart = clip.startTime;
-        const clipEnd = clip.endTime;
-        const clipDurationSec = Math.max(0.1, (clipEnd - clipStart) / r);
 
         // Keep active video playing smoothly without interrupting hardware decoder
         if (currentVideo.paused && !currentVideo.ended) {
@@ -1405,59 +1461,14 @@ export async function exportCombinedVideo(
           });
         }
 
-        // Stall guard: If video is buffering or stalled, pause recorder to avoid encoding frozen frames
-        if (currentVideo.readyState < 2 || (currentVideo.paused && !currentVideo.ended)) {
-          if (recorder.state === 'recording') {
-            try {
-              recorder.pause();
-            } catch {}
-          }
-          // Loop until video resumes decoding
-          animId = requestAnimationFrame(renderLoop);
-          return;
-        } else {
-          if (recorder.state === 'paused') {
-            try {
-              recorder.resume();
-            } catch {}
-          }
-        }
-
-        // Clip local playback progress derived from actual decoded video position
-        const currentClipPos = Math.max(clipStart, Math.min(clipEnd, currentVideo.currentTime));
-        const timeInClip = Math.max(0, Math.min(clipDurationSec, (currentClipPos - clipStart) / r));
-        const timelineTime = Math.min(totalDuration, currentSeg.clipStartInTimeline + timeInClip);
-        const timeRemainingInClip = Math.max(0, clipDurationSec - timeInClip);
-
-        // Track progress watchdog
-        if (timelineTime > lastObservedTimelineTime + 0.04) {
-          lastObservedTimelineTime = timelineTime;
-          lastProgressTimestamp = performance.now();
-        }
-
-        // PRE-ROLL UPCOMING CLIP:
-        // 0.8 seconds before transition or segment end, start the next clip in background (silent),
-        // so its hardware decoder is 100% warmed up and running when transition/handoff occurs!
-        const nextIndex = activeSegIndex + 1;
-        const trans = currentSeg.transitionWithNext;
-        const hasNext = nextIndex < segments.length;
-
-        if (hasNext && !prestartedClips.has(nextIndex)) {
-          const prestartThreshold = trans ? Math.max(0.6, trans.duration + 0.3) : 0.8;
-          if (timeRemainingInClip <= prestartThreshold) {
-            prestartedClips.add(nextIndex);
-            const nextVideo = videoElements[nextIndex];
-            const nextClip = segments[nextIndex].clip;
-            if (clipGainNodes[nextIndex]) {
-              clipGainNodes[nextIndex]!.gain.value = 0; // silent until active
-            }
-            try {
-              nextVideo.currentTime = nextClip.startTime;
-              nextVideo.playbackRate = nextClip.playbackRate || 1.0;
-              nextVideo.play().catch(() => {});
-            } catch {}
-          }
-        }
+        // Calculate clip local playback time and timeline position
+        const clipDurationSec = Math.max(0.1, (clip.endTime - clip.startTime) / r);
+        const videoCurrentTime = currentVideo.currentTime;
+        const timeInClip = Math.max(0, (videoCurrentTime - clip.startTime) / r);
+        const timelineTime = Math.min(
+          totalDuration,
+          currentSeg.clipStartInTimeline + Math.min(clipDurationSec, timeInClip),
+        );
 
         // Goal horn cutoff marker
         if (activeHornStopAt !== null && timelineTime >= activeHornStopAt) {
@@ -1475,10 +1486,14 @@ export async function exportCombinedVideo(
         ctx.fillRect(0, 0, width, height);
 
         // Transition handling
+        const trans = currentSeg.transitionWithNext;
+        const nextIndex = activeSegIndex + 1;
+        const hasNext = nextIndex < segments.length && Boolean(trans);
+
         const isInTransition = Boolean(
           hasNext &&
           trans &&
-          timeRemainingInClip <= trans.duration,
+          timelineTime >= trans.startInTimeline,
         );
 
         if (isInTransition && trans && nextIndex < segments.length) {
@@ -1494,9 +1509,9 @@ export async function exportCombinedVideo(
             });
           }
 
-          const transProgress = Math.max(0, Math.min(1, 1 - (timeRemainingInClip / trans.duration)));
+          const transProgress = Math.max(0, Math.min(1, (timelineTime - trans.startInTimeline) / trans.duration));
 
-          // Crossfade audio smoothly
+          // Crossfade audio
           const clip1Vol = clip.volume ?? 1.0;
           const clip2Vol = nextClip.volume ?? 1.0;
           if (clipGainNodes[activeSegIndex]) {
@@ -1649,27 +1664,21 @@ export async function exportCombinedVideo(
           }
         }
 
-        // Check if current segment is completed based on actual video playback
-        const isSegmentFinished =
-          currentVideo.ended ||
-          currentVideo.currentTime >= clipEnd - 0.05 ||
-          timeInClip >= clipDurationSec - 0.04;
+        // Check if current segment is completed
+        const segmentFinished =
+          isInTransition
+            ? (timelineTime >= currentSeg.clipEndInTimeline || videoCurrentTime >= clip.endTime - 0.04)
+            : (videoCurrentTime >= clip.endTime - 0.04 || timeInClip >= clipDurationSec);
 
-        if (isSegmentFinished) {
+        if (segmentFinished) {
           if (nextIndex < segments.length) {
-            // Hand off to next segment cleanly (which was pre-warmed)
+            // Hand off to next segment cleanly
             currentVideo.pause();
             if (clipGainNodes[activeSegIndex]) {
               clipGainNodes[activeSegIndex]!.gain.value = 0;
             }
 
             activeSegIndex = nextIndex;
-            const nextClip = segments[activeSegIndex].clip;
-            if (clipGainNodes[activeSegIndex]) {
-              clipGainNodes[activeSegIndex]!.gain.value = nextClip.volume ?? 1.0;
-            }
-            videoElements[activeSegIndex].playbackRate = nextClip.playbackRate || 1.0;
-            videoElements[activeSegIndex].play().catch(() => {});
 
             // Pre-prime subsequent clip (if one exists after next)
             if (activeSegIndex + 1 < videoElements.length) {
@@ -1685,9 +1694,8 @@ export async function exportCombinedVideo(
           }
         }
 
-        // Safety watchdog: prevent indefinite loop if browser tab completely hangs
-        if (performance.now() - lastProgressTimestamp > 25000) {
-          console.warn('Watchdog triggered: export progress stalled for 25s, finalizing.');
+        // Safety watchdog: prevent indefinite loop if browser tab throttles or a video stalls
+        if ((performance.now() - renderStartTime) / 1000 > totalDuration + 6.0) {
           finishExport();
           return;
         }
