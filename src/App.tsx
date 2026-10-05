@@ -8,7 +8,7 @@ import { AspectRatio, ExportOptions, FramingMode, HockeyOverlaySettings, Transit
 import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
 import { Timeline } from './components/Timeline';
-import { ClipSequencePanel } from './components/ClipSequencePanel';
+import { OverlayControls } from './components/OverlayControls';
 import { ExportModal } from './components/ExportModal';
 import { YouTubeUploadModal } from './components/YouTubeUploadModal';
 import { YouTubeAuthModal } from './components/YouTubeAuthModal';
@@ -30,43 +30,43 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Overlay Settings (disabled for simple and clean video connection)
+  // Hockey Overlays
   const [overlaySettings, setOverlaySettings] = useState<HockeyOverlaySettings>({
     scorebug: {
-      enabled: false,
+      enabled: true,
       homeTeam: 'NYR',
       awayTeam: 'BOS',
-      homeScore: 0,
-      awayScore: 0,
-      period: '1ST',
-      timeRemaining: '20:00',
+      homeScore: 3,
+      awayScore: 2,
+      period: '3RD',
+      timeRemaining: '0:18',
     },
     playerBanner: {
-      enabled: false,
-      playerName: '',
-      jerseyNumber: '',
-      actionText: '',
+      enabled: true,
+      playerName: 'Connor McDavid',
+      jerseyNumber: '97',
+      actionText: 'Top Shelf Laser Snapper 🚨',
     },
-    goalHornSound: false,
+    goalHornSound: true,
     hornConfig: {
-      enabled: false,
+      enabled: true,
       useCustomHorn: false,
       triggerMode: 'every_clip',
       clipOffsetSeconds: 0.5,
-      volume: 0,
-      hornDuration: 0,
+      volume: 1.0,
+      hornDuration: 5.0,
       skipClipsWithNativeHorn: true,
-      duckVideoAudio: false,
+      duckVideoAudio: true,
     },
-    redSirenFlash: false,
-    showStamps: false,
-    showHighlightTags: false,
+    redSirenFlash: true,
+    showStamps: true,
+    showHighlightTags: true,
     backgroundMusic: {
       enabled: false,
       volume: 0.75,
       originalVideoVolume: 1.0,
-      duckOnGoalHorn: false,
-      loop: false,
+      duckOnGoalHorn: true,
+      loop: true,
       currentTrack: null,
       selectedStyle: 'arena-rock',
       customPrompt: '',
@@ -271,11 +271,20 @@ export default function App() {
           if (newIndex !== -1) setSelectedClipIndex(newIndex);
         }
 
-        // Set transitions to 0s (direct clean cuts without transitions)
+        // Ensure transition list matches updated length - 1
         setTransitions((prevTrans) => {
           const trans = [...prevTrans];
+          const transitionStyles: Transition['type'][] = [
+            'wipe-left',
+            'crossfade',
+            'goal-flash',
+            'slide-push',
+            'zoom',
+            'glitch',
+          ];
           while (trans.length < updated.length - 1) {
-            trans.push({ type: 'crossfade', duration: 0 });
+            const nextType = transitionStyles[trans.length % transitionStyles.length];
+            trans.push({ type: nextType, duration: 0.8 });
           }
           return trans.slice(0, Math.max(0, updated.length - 1));
         });
@@ -314,7 +323,7 @@ export default function App() {
       setTransitions((prevTrans) => {
         const trans = [...prevTrans];
         while (trans.length < sorted.length - 1) {
-          trans.push({ type: 'crossfade', duration: 0 });
+          trans.push({ type: 'wipe-left', duration: 0.8 });
         }
         return trans.slice(0, Math.max(0, sorted.length - 1));
       });
@@ -329,7 +338,7 @@ export default function App() {
       setTransitions((prevTrans) => {
         const trans = [...prevTrans];
         while (trans.length < updated.length - 1) {
-          trans.push({ type: 'crossfade', duration: 0 });
+          trans.push({ type: 'wipe-left', duration: 0.8 });
         }
         return trans;
       });
@@ -414,173 +423,8 @@ export default function App() {
     setSelectedClipIndex(index);
   };
 
-  // Download video: merges all clips into 1 single video if multiple, or downloads single file
-  const handleDownloadOriginal = (targetClip?: VideoClip) => {
-    if (!targetClip && clips.length > 1) {
-      handleConnectAndExport();
-      return;
-    }
-
-    const clip = targetClip || clips[0];
-    if (!clip) return;
-
-    let filename = clip.name || 'original-video';
-    if (!filename.includes('.')) {
-      const mime = clip.blob?.type || '';
-      const ext = mime.includes('webm') ? 'webm' : mime.includes('quicktime') ? 'mov' : 'mp4';
-      filename = `${filename}.${ext}`;
-    }
-
-    if (clip.blob) {
-      const url = URL.createObjectURL(clip.blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 15000);
-    } else if (clip.url) {
-      const a = document.createElement('a');
-      a.href = clip.url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }
-  };
-
-  // Connect all clips and export as a single seamless MP4 video
-  const handleConnectAndExport = async () => {
-    if (clips.length === 0) return;
-
-    // Single clip -> instant download of original
-    if (clips.length === 1) {
-      handleDownloadOriginal(clips[0]);
-      return;
-    }
-
-    setIsExporting(true);
-    setIsExportCompleted(false);
-    setExportProgress(5);
-    setExportStatusText(`Preparing ${clips.length} clips for high-speed merge...`);
-    setIsExportModalOpen(true);
-
-    try {
-      const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const clipsMeta = clips.map((c) => ({
-        startTime: c.startTime || 0,
-        endTime: c.endTime && c.endTime > (c.startTime || 0) ? c.endTime : c.originalDuration || 0,
-      }));
-
-      // Upload each clip in 4MB chunks (100% resilient to Cloud Run 32MB payload limit)
-      const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB chunk size
-
-      for (let i = 0; i < clips.length; i++) {
-        const c = clips[i];
-        let fileBlob = c.blob;
-        if (!fileBlob && c.url) {
-          const r = await fetch(c.url);
-          fileBlob = await r.blob();
-        }
-
-        if (!fileBlob) {
-          throw new Error(`Clip #${i + 1} (${c.name}) data not available.`);
-        }
-
-        const fileSize = fileBlob.size;
-        const totalChunks = Math.max(1, Math.ceil(fileSize / CHUNK_SIZE));
-
-        for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
-          const start = chunkIdx * CHUNK_SIZE;
-          const end = Math.min(fileSize, start + CHUNK_SIZE);
-          const chunkBlob = fileBlob.slice(start, end);
-
-          const chunkForm = new FormData();
-          chunkForm.append('sessionId', sessionId);
-          chunkForm.append('clipIndex', String(i));
-          chunkForm.append('chunkIndex', String(chunkIdx));
-          chunkForm.append('totalChunks', String(totalChunks));
-          chunkForm.append('chunk', chunkBlob, `chunk_${chunkIdx}.bin`);
-
-          const upRes = await fetch('/api/upload-chunk', {
-            method: 'POST',
-            body: chunkForm,
-          });
-
-          if (!upRes.ok) {
-            const errText = await upRes.text();
-            throw new Error(`Upload error on clip #${i + 1} (${c.name}, chunk ${chunkIdx + 1}/${totalChunks}): ${errText}`);
-          }
-
-          const clipFraction = (chunkIdx + 1) / totalChunks;
-          const overallPct = Math.round(5 + ((i + clipFraction) / clips.length) * 75);
-          setExportProgress(overallPct);
-          setExportStatusText(
-            totalChunks > 1
-              ? `Uploading clip ${i + 1} of ${clips.length} (${c.name} • part ${chunkIdx + 1}/${totalChunks})...`
-              : `Uploading clip ${i + 1} of ${clips.length} (${c.name})...`
-          );
-        }
-      }
-
-      // Trigger high-speed server merge
-      setExportProgress(82);
-      setExportStatusText(`Merging all ${clips.length} clips into 1 video with FFmpeg (zero stutter, 100% native quality)...`);
-
-      const mergeRes = await fetch('/api/merge-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          totalClips: clips.length,
-          clipsMeta,
-        }),
-      });
-
-      if (!mergeRes.ok) {
-        const errText = await mergeRes.text();
-        throw new Error(`Video merge failed: ${errText}`);
-      }
-
-      setExportProgress(96);
-      setExportStatusText('Finalizing merged video file...');
-
-      const connectedBlob = await mergeRes.blob();
-      setExportedBlob(connectedBlob);
-      setIsExportCompleted(true);
-      setIsExporting(false);
-      setExportProgress(100);
-      setExportStatusText(`Merged all ${clips.length} clips into 1 video successfully!`);
-
-      // Trigger download immediately of the ONE merged video
-      const downloadUrl = URL.createObjectURL(connectedBlob);
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = `merged-hockey-video-${clips.length}-clips-${Date.now()}.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(downloadUrl), 15000);
-      return connectedBlob;
-    } catch (err: any) {
-      console.error('Merge export error:', err);
-      setIsExporting(false);
-      setExportStatusText(`Error: ${err?.message || 'Failed to merge clips'}. Please try again.`);
-      return null;
-    }
-  };
-
-  // Open Export / Save Modal with original untouched video (NO auto-rendering)
-  const handleOpenExportModal = () => {
-    if (clips.length === 0) return;
-    setIsExporting(false);
-    setIsExportCompleted(true);
-    setIsExportModalOpen(true);
-  };
-
-  // Optional manual re-render with overlays (strictly opt-in, only if user explicitly clicks render in options)
-  const handleStartCanvasRender = async (overrideOptions?: ExportOptions): Promise<Blob | null> => {
+  // Export Combined Video Sequence with Original Source Quality
+  const handleExport = async (overrideOptions?: ExportOptions): Promise<Blob | null> => {
     if (clips.length === 0) return null;
 
     const activeOptions = overrideOptions || exportOptions;
@@ -627,25 +471,12 @@ export default function App() {
     }
   };
 
-  const handleCancelRender = () => {
-    setIsExporting(false);
-    setExportStatusText('Cancelled render — original video preserved.');
-  };
-
-  // Direct YouTube Upload action (merges all clips together if multiple)
+  // Direct YouTube Upload action
   const handleOpenUpload = async () => {
-    if (clips.length === 0) return;
-    if (clips.length > 1 && !exportedBlob) {
-      const merged = await handleConnectAndExport();
-      if (merged) {
-        setExportedBlob(merged);
-        setIsUploadModalOpen(true);
-      }
-      return;
-    }
-    const blobToUpload = exportedBlob || clips[0]?.blob || null;
-    if (blobToUpload) {
-      setExportedBlob(blobToUpload);
+    // If no exported blob yet or 0 MB, export first!
+    if (!exportedBlob || exportedBlob.size === 0) {
+      const freshBlob = await handleExport();
+      if (!freshBlob || freshBlob.size === 0) return;
     }
     setIsUploadModalOpen(true);
   };
@@ -698,8 +529,7 @@ export default function App() {
         channelTitle={channelTitle}
         onSignIn={() => setIsAuthModalOpen(true)}
         onSignOut={handleSignOut}
-        onDownloadOriginal={() => handleDownloadOriginal()}
-        onExport={handleConnectAndExport}
+        onExport={handleExport}
         onOpenUpload={handleOpenUpload}
         onClearProject={handleClearProject}
         isExporting={isExporting}
@@ -710,10 +540,10 @@ export default function App() {
 
       {/* Main Studio Viewport - strictly fits 100% monitor viewport without vertical scrolling */}
       <main className="flex-1 min-h-0 w-full px-2.5 sm:px-3 py-2 flex flex-col gap-2 overflow-hidden">
-        {/* Top Split: Video Player on the left, Connected Clips Sequence on the right */}
+        {/* Top Split: Video Player on the left, Overlays / Controls on the right */}
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-2.5 overflow-hidden">
-          {/* Main Stage Video Player (8 columns on desktop) */}
-          <div className="lg:col-span-8 xl:col-span-8 flex flex-col min-h-0 h-full overflow-hidden">
+          {/* Main Stage Video Player (7 columns on desktop) */}
+          <div className="lg:col-span-7 xl:col-span-7 flex flex-col min-h-0 h-full overflow-hidden">
             <VideoPlayer
               clips={clips}
               selectedClipIndex={selectedClipIndex}
@@ -743,18 +573,15 @@ export default function App() {
             />
           </div>
 
-          {/* Connected Clips Sequence Panel (4 columns on desktop) */}
-          <div className="lg:col-span-4 xl:col-span-4 flex flex-col min-h-0 h-full overflow-hidden">
-            <ClipSequencePanel
+          {/* Hockey Overlays, Scorebug, & Sound FX Config (5 columns on desktop) */}
+          <div className="lg:col-span-5 xl:col-span-5 flex flex-col min-h-0 h-full overflow-hidden">
+            <OverlayControls
+              settings={overlaySettings}
+              onChange={setOverlaySettings}
               clips={clips}
               selectedClipIndex={selectedClipIndex}
               onSelectClipIndex={setSelectedClipIndex}
               onUpdateClip={handleUpdateClip}
-              onRemoveClip={handleRemoveClip}
-              onMoveClip={handleMoveClip}
-              onConnectAndExport={handleConnectAndExport}
-              isExporting={isExporting}
-              onAddFiles={handleAddFiles}
             />
           </div>
         </div>
@@ -773,12 +600,11 @@ export default function App() {
             onSelectClipForEdit={handleSelectClipForEdit}
             selectedClipIndex={selectedClipIndex}
             onSortChronological={handleSortChronological}
-            onConnectAndExport={handleConnectAndExport}
           />
         </div>
       </main>
 
-      {/* Export / Save Modal */}
+      {/* Export / Render Progress Modal */}
       {isExportModalOpen && (
         <ExportModal
           isOpen={isExportModalOpen}
@@ -786,18 +612,11 @@ export default function App() {
           progressPercent={exportProgress}
           statusMessage={exportStatusText}
           isCompleted={isExportCompleted}
-          isRendering={isExporting}
           exportedBlob={exportedBlob}
-          onProceedToYouTube={(targetBlob) => {
-            if (targetBlob) setExportedBlob(targetBlob);
-            setIsUploadModalOpen(true);
-          }}
+          onProceedToYouTube={() => setIsUploadModalOpen(true)}
           exportOptions={exportOptions}
           onUpdateOptions={(opts) => setExportOptions(opts)}
-          onReExport={() => handleConnectAndExport()}
-          onDownloadOriginal={handleDownloadOriginal}
-          onConnectAndExport={handleConnectAndExport}
-          onCancelRender={handleCancelRender}
+          onReExport={(opts) => handleExport(opts)}
           clips={clips}
           aspectRatio={aspectRatio}
         />
