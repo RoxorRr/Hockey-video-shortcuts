@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Transition, TransitionType, VideoClip } from '../types';
+import React from 'react';
+import { Transition, VideoClip } from '../types';
 import {
   Plus,
   Trash2,
@@ -7,60 +7,37 @@ import {
   ChevronLeft,
   ChevronRight,
   Sparkles,
-  Zap,
-  Layers,
-  ArrowRightLeft,
-  Flame,
-  Maximize,
-  Tv,
-  ZoomIn,
-  Shield,
   Clock,
-  Loader2,
   Download,
+  Film,
 } from 'lucide-react';
-import { playTransitionWhoosh } from '../lib/audio';
 
 interface TimelineProps {
   clips: VideoClip[];
-  transitions: Transition[];
+  transitions?: Transition[];
   onAddFiles: (files: FileList | File[]) => void;
   onAddSampleClips: () => void;
   onUpdateClip: (index: number, updated: VideoClip) => void;
   onRemoveClip: (index: number) => void;
   onMoveClip: (index: number, direction: 'left' | 'right') => void;
-  onUpdateTransition: (index: number, transition: Transition) => void;
+  onUpdateTransition?: (index: number, transition: Transition) => void;
   onSelectClipForEdit: (clip: VideoClip, index: number) => void;
   selectedClipIndex: number | null;
   onSortChronological?: () => void;
   onDownloadOriginalClip?: (clip: VideoClip) => void;
 }
 
-const TRANSITION_OPTIONS: { type: TransitionType; label: string; icon: React.ReactNode; desc: string }[] = [
-  { type: 'crossfade', label: 'Crossfade', icon: <Layers className="w-3.5 h-3.5" />, desc: 'Smooth dissolve blend' },
-  { type: 'wipe-left', label: 'Ice Wipe Left', icon: <ChevronLeft className="w-3.5 h-3.5" />, desc: 'Zamboni left sweep' },
-  { type: 'wipe-right', label: 'Ice Wipe Right', icon: <ChevronRight className="w-3.5 h-3.5" />, desc: 'Zamboni right sweep' },
-  { type: 'slide-push', label: 'Slide Push', icon: <ArrowRightLeft className="w-3.5 h-3.5" />, desc: 'High-speed puck push' },
-  { type: 'goal-flash', label: 'Goal Flash', icon: <Flame className="w-3.5 h-3.5 text-amber-400" />, desc: 'Goal light strobe flash' },
-  { type: 'zoom', label: 'Zoom Burst', icon: <Maximize className="w-3.5 h-3.5" />, desc: 'Dynamic camera zoom burst' },
-  { type: 'glitch', label: 'Puck Glitch', icon: <Zap className="w-3.5 h-3.5 text-sky-400" />, desc: 'High-impact freeze glitch' },
-];
-
 export const Timeline: React.FC<TimelineProps> = ({
   clips,
-  transitions,
   onAddFiles,
   onAddSampleClips,
   onRemoveClip,
   onMoveClip,
-  onUpdateTransition,
   onSelectClipForEdit,
   selectedClipIndex,
   onSortChronological,
   onDownloadOriginalClip,
 }) => {
-  const [activeTransitionModalIndex, setActiveTransitionModalIndex] = useState<number | null>(null);
-
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       onAddFiles(e.target.files);
@@ -68,6 +45,16 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const hasTimestamps = clips.some((c) => c.recordedAt !== undefined);
+  const totalDuration = clips.reduce(
+    (sum, c) =>
+      sum +
+      Math.max(
+        0.1,
+        ((c.endTime && c.endTime > (c.startTime || 0) ? c.endTime : c.originalDuration) - (c.startTime || 0)) /
+          (c.playbackRate || 1),
+      ),
+    0,
+  );
 
   return (
     <div className="w-full bg-slate-900/95 border-t border-slate-800 px-3 py-1.5 select-none shrink-0">
@@ -89,16 +76,6 @@ export const Timeline: React.FC<TimelineProps> = ({
             >
               <Clock className="w-2.5 h-2.5 text-amber-400" />
               Chronological (Oldest &rarr; Newest)
-            </span>
-          )}
-
-          {clips.some((c) => c.isBuffering || !c.isLoaded) && (
-            <span
-              className="hidden lg:inline-flex items-center gap-1 text-[10px] font-mono text-amber-300 bg-amber-950/70 border border-amber-700/60 px-2 py-0.5 rounded animate-pulse"
-              title="Buffering uploaded videos into memory to eliminate export stuttering"
-            >
-              <Loader2 className="w-2.5 h-2.5 animate-spin text-amber-400" />
-              Buffering video files into memory...
             </span>
           )}
         </div>
@@ -178,7 +155,6 @@ export const Timeline: React.FC<TimelineProps> = ({
         ) : (
           <div className="flex items-center gap-2 min-w-max">
             {clips.map((clip, index) => {
-              const trans = transitions[index];
               const isSelected = selectedClipIndex === index;
               const s = Number.isFinite(clip.startTime) && clip.startTime >= 0 ? clip.startTime : 0;
               const e = Number.isFinite(clip.endTime) && clip.endTime > s ? clip.endTime : s + 3.0;
@@ -205,101 +181,32 @@ export const Timeline: React.FC<TimelineProps> = ({
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <Tv className="w-6 h-6 text-slate-700" />
-                      )}
-
-                      {/* Tag pill */}
-                      {clip.tag && (
-                        <span
-                          className={`absolute top-1 left-1 text-[9px] font-black px-1 py-0.2 rounded tracking-wider ${
-                            clip.tag === 'GOAL'
-                              ? 'bg-red-600 text-white'
-                              : clip.tag === 'SAVE'
-                              ? 'bg-sky-600 text-white'
-                              : 'bg-amber-600 text-white'
-                          }`}
-                        >
-                          {clip.tag}
-                        </span>
-                      )}
-
-                      {/* Zoom badge if clip has zoom > 1.05 */}
-                      {clip.zoom && clip.zoom > 1.05 && (
-                        <span
-                          className="absolute top-1 right-1 bg-amber-500 text-slate-950 font-black text-[9px] px-1 py-0.2 rounded flex items-center gap-0.5 shadow-xs shadow-black/50"
-                          title={`Clip zoomed to ${clip.zoom.toFixed(1)}x magnification`}
-                        >
-                          <ZoomIn className="w-2 h-2 stroke-[2.5]" />
-                          {clip.zoom.toFixed(1)}x
-                        </span>
+                        <Film className="w-6 h-6 text-slate-700" />
                       )}
 
                       {/* Sequence index badge */}
-                      <span className="absolute bottom-1 left-1 bg-black/80 backdrop-blur-xs text-[9px] font-mono text-slate-300 px-1 py-0.2 rounded font-bold">
+                      <span className="absolute bottom-1 left-1 bg-black/80 backdrop-blur-xs text-[9px] font-mono text-emerald-400 px-1.5 py-0.5 rounded font-bold border border-emerald-900/60">
                         #{index + 1}
                       </span>
 
                       {/* Duration stamp */}
-                      <span className="absolute bottom-1 right-1 bg-black/80 backdrop-blur-xs text-[9px] font-mono text-slate-200 px-1 py-0.2 rounded">
+                      <span className="absolute bottom-1 right-1 bg-black/80 backdrop-blur-xs text-[9px] font-mono text-slate-200 px-1 py-0.5 rounded">
                         {trimmedDuration.toFixed(1)}s
                       </span>
                     </div>
 
                     {/* Clip Info */}
-                    <div className="flex items-center justify-between mb-0.5">
+                    <div className="flex items-center justify-between mb-1">
                       <h4
-                        className="text-[11px] font-semibold text-white truncate max-w-[85px]"
+                        className="text-xs font-semibold text-white truncate max-w-[110px]"
                         title={clip.name}
                       >
                         {clip.name}
                       </h4>
-                      <div className="flex items-center gap-1">
-                        {clip.isBuffering ? (
-                          <span
-                            className="text-[8px] font-mono text-amber-400 bg-amber-950/80 border border-amber-700/60 px-1 py-0.2 rounded flex items-center gap-0.5 animate-pulse"
-                            title="Buffering into memory to eliminate stutter"
-                          >
-                            <Loader2 className="w-1.5 h-1.5 animate-spin" />
-                            RAM
-                          </span>
-                        ) : clip.isLoaded ? (
-                          <span
-                            className="text-[8px] font-mono text-emerald-400 bg-emerald-950/70 border border-emerald-800/60 px-1 py-0.2 rounded"
-                            title="100% loaded in browser memory"
-                          >
-                            ✓ RAM
-                          </span>
-                        ) : null}
-                        <span className="text-[9px] text-slate-400 font-mono">
-                          {clip.playbackRate !== 1 ? `${clip.playbackRate}x` : ''}
-                        </span>
-                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {clip.playbackRate !== 1 ? `${clip.playbackRate}x` : ''}
+                      </span>
                     </div>
-
-                    {/* Timestamp badge if detected from filename or metadata */}
-                    {clip.recordedAtDisplay && (
-                      <div
-                        className="flex items-center gap-1 text-[9px] font-mono text-amber-300/95 bg-amber-950/60 border border-amber-800/50 px-1 py-0.5 rounded mb-1 truncate"
-                        title={`Time: ${clip.recordedAtDisplay} ${clip.hasFilenameTimestamp ? '(parsed from filename)' : ''}`}
-                      >
-                        <Clock className="w-2.5 h-2.5 text-amber-400 shrink-0" />
-                        <span className="truncate">{clip.recordedAtDisplay}</span>
-                      </div>
-                    )}
-
-                    {/* Custom Overlay Tag if active */}
-                    {clip.useCustomOverlays && (
-                      <div
-                        className="flex items-center gap-1 text-[9px] text-sky-300 font-medium mb-1 truncate bg-sky-950/60 border border-sky-800/60 px-1 py-0.2 rounded"
-                        title={`Player: ${clip.playerBannerOverride?.playerName || 'Custom'} (${clip.scorebugOverride?.awayScore ?? 0}-${clip.scorebugOverride?.homeScore ?? 0})`}
-                      >
-                        <Shield className="w-2.5 h-2.5 text-sky-400 shrink-0" />
-                        <span className="truncate">
-                          {clip.playerBannerOverride?.jerseyNumber ? `#${clip.playerBannerOverride.jerseyNumber} ` : ''}
-                          {clip.playerBannerOverride?.playerName || 'Custom Overlay'}
-                        </span>
-                      </div>
-                    )}
 
                     {/* Action buttons */}
                     <div className="flex items-center justify-between pt-0.5 border-t border-slate-850 text-xs">
@@ -373,103 +280,16 @@ export const Timeline: React.FC<TimelineProps> = ({
                     </div>
                   </div>
 
-                  {/* Transition connector node between clips */}
-                  {index < clips.length - 1 && trans && (
-                    <div className="flex flex-col items-center justify-center relative">
-                      <div className="w-6 h-0.5 bg-slate-700"></div>
-
-                      <button
-                        id={`transition-node-btn-${index}`}
-                        onClick={() => {
-                          playTransitionWhoosh();
-                          setActiveTransitionModalIndex(
-                            activeTransitionModalIndex === index ? null : index,
-                          );
-                        }}
-                        className={`my-1 px-2.5 py-1.5 rounded-lg border text-xs flex flex-col items-center gap-1 transition ${
-                          activeTransitionModalIndex === index
-                            ? 'bg-sky-600 text-white border-sky-400 shadow-lg shadow-sky-950/60'
-                            : 'bg-slate-800/90 text-sky-300 border-slate-700 hover:bg-slate-750 hover:border-sky-500'
-                        }`}
-                        title="Click to change transition effect"
+                  {/* Clean Direct Connection between clips */}
+                  {index < clips.length - 1 && (
+                    <div className="flex items-center justify-center px-1 shrink-0 text-slate-500">
+                      <div
+                        className="flex items-center gap-1 bg-slate-850 hover:bg-slate-800 px-2 py-1 rounded text-xs font-mono text-slate-400 border border-slate-700/80 transition"
+                        title="Clips connect seamlessly back-to-back with clean direct cut"
                       >
-                        <div className="flex items-center gap-1.5 font-bold tracking-tight">
-                          {TRANSITION_OPTIONS.find((t) => t.type === trans.type)?.icon || (
-                            <Layers className="w-3.5 h-3.5" />
-                          )}
-                          <span className="capitalize">{trans.type.replace('-', ' ')}</span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          {trans.duration}s
-                        </span>
-                      </button>
-
-                      <div className="w-6 h-0.5 bg-slate-700"></div>
-
-                      {/* Transition Selection Popover */}
-                      {activeTransitionModalIndex === index && (
-                        <div className="absolute top-16 z-40 bg-slate-900 border border-slate-700 rounded-xl p-3 shadow-2xl w-64 text-left backdrop-blur-md">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs font-bold text-white uppercase tracking-wider font-['Chakra_Petch']">
-                              Select Transition
-                            </span>
-                            <button
-                              onClick={() => setActiveTransitionModalIndex(null)}
-                              className="text-slate-400 hover:text-white text-xs"
-                            >
-                              ✕
-                            </button>
-                          </div>
-
-                          <div className="flex flex-col gap-1 mb-3">
-                            {TRANSITION_OPTIONS.map((opt) => (
-                              <button
-                                key={opt.type}
-                                onClick={() => {
-                                  onUpdateTransition(index, { ...trans, type: opt.type });
-                                  playTransitionWhoosh();
-                                  setActiveTransitionModalIndex(null);
-                                }}
-                                className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs transition ${
-                                  trans.type === opt.type
-                                    ? 'bg-sky-600 text-white font-bold'
-                                    : 'text-slate-300 hover:bg-slate-800'
-                                }`}
-                              >
-                                {opt.icon}
-                                <div>
-                                  <p className="font-semibold">{opt.label}</p>
-                                  <p className="text-[10px] text-slate-400">{opt.desc}</p>
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-
-                          {/* Duration slider */}
-                          <div className="pt-2 border-t border-slate-800">
-                            <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                              <span>Duration</span>
-                              <span className="font-mono text-sky-400 font-bold">
-                                {trans.duration}s
-                              </span>
-                            </div>
-                            <input
-                              type="range"
-                              min={0.3}
-                              max={1.8}
-                              step={0.1}
-                              value={trans.duration}
-                              onChange={(e) => {
-                                onUpdateTransition(index, {
-                                  ...trans,
-                                  duration: parseFloat(e.target.value),
-                                });
-                              }}
-                              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
-                            />
-                          </div>
-                        </div>
-                      )}
+                        <span className="text-emerald-400 font-bold">&rarr;</span>
+                        <span className="text-[10px] text-slate-400 font-['Chakra_Petch']">CONNECT</span>
+                      </div>
                     </div>
                   )}
                 </React.Fragment>

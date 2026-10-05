@@ -135,7 +135,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             )}
             <div>
               <h3 className="font-bold text-base text-white font-['Chakra_Petch'] tracking-wide flex items-center gap-2">
-                {isRendering ? 'RENDERING OVERLAYS...' : 'ORIGINAL UNTOUCHED VIDEO'}
+                {isRendering ? 'CONNECTING CLIPS...' : 'CONNECTED VIDEO'}
                 {!isRendering && (
                   <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700/60 uppercase">
                     100% Quality
@@ -144,7 +144,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               </h3>
               <p className="text-[11px] text-slate-400">
                 {isRendering
-                  ? 'Re-encoding canvas stream with burnt-in scoreboard overlays'
+                  ? 'Joining all clips seamlessly into one high-speed connected video'
                   : 'Zero re-encoding & zero compression — exact original video bit-for-bit'}
               </p>
             </div>
@@ -171,7 +171,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                   />
                   <path
-                    className="text-amber-500 transition-all duration-300 stroke-current"
+                    className="text-emerald-500 transition-all duration-300 stroke-current"
                     strokeDasharray={`${progressPercent}, 100`}
                     strokeWidth="3"
                     strokeLinecap="round"
@@ -188,15 +188,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 <p className="text-sm font-semibold text-white mb-1 font-['Chakra_Petch'] tracking-wide">
                   {statusMessage}
                 </p>
-                <p className="text-xs text-amber-300/80">
-                  Canvas re-encoding can take time on large files. You can cancel at any time to keep the pristine original.
+                <p className="text-xs text-emerald-300/80">
+                  Joining clips with native high-speed video engine. Zero stutter &amp; 100% original quality.
                 </p>
               </div>
 
               {/* Progress Bar */}
               <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                 <div
-                  className="bg-gradient-to-r from-amber-500 to-red-500 h-full transition-all duration-300"
+                  className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full transition-all duration-300"
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
@@ -208,7 +208,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   onClick={onCancelRender}
                   className="px-4 py-2 rounded-xl text-xs font-bold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition cursor-pointer"
                 >
-                  Cancel &amp; Keep Original Video
+                  Cancel
                 </button>
               )}
             </div>

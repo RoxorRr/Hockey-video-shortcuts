@@ -8,7 +8,7 @@ import { AspectRatio, ExportOptions, FramingMode, HockeyOverlaySettings, Transit
 import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
 import { Timeline } from './components/Timeline';
-import { OverlayControls } from './components/OverlayControls';
+import { ClipSequencePanel } from './components/ClipSequencePanel';
 import { ExportModal } from './components/ExportModal';
 import { YouTubeUploadModal } from './components/YouTubeUploadModal';
 import { YouTubeAuthModal } from './components/YouTubeAuthModal';
@@ -30,43 +30,43 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Hockey Overlays
+  // Overlay Settings (disabled for simple and clean video connection)
   const [overlaySettings, setOverlaySettings] = useState<HockeyOverlaySettings>({
     scorebug: {
-      enabled: true,
+      enabled: false,
       homeTeam: 'NYR',
       awayTeam: 'BOS',
-      homeScore: 3,
-      awayScore: 2,
-      period: '3RD',
-      timeRemaining: '0:18',
+      homeScore: 0,
+      awayScore: 0,
+      period: '1ST',
+      timeRemaining: '20:00',
     },
     playerBanner: {
-      enabled: true,
-      playerName: 'Connor McDavid',
-      jerseyNumber: '97',
-      actionText: 'Top Shelf Laser Snapper 🚨',
+      enabled: false,
+      playerName: '',
+      jerseyNumber: '',
+      actionText: '',
     },
-    goalHornSound: true,
+    goalHornSound: false,
     hornConfig: {
-      enabled: true,
+      enabled: false,
       useCustomHorn: false,
       triggerMode: 'every_clip',
       clipOffsetSeconds: 0.5,
-      volume: 1.0,
-      hornDuration: 5.0,
+      volume: 0,
+      hornDuration: 0,
       skipClipsWithNativeHorn: true,
-      duckVideoAudio: true,
+      duckVideoAudio: false,
     },
-    redSirenFlash: true,
-    showStamps: true,
-    showHighlightTags: true,
+    redSirenFlash: false,
+    showStamps: false,
+    showHighlightTags: false,
     backgroundMusic: {
       enabled: false,
       volume: 0.75,
       originalVideoVolume: 1.0,
-      duckOnGoalHorn: true,
-      loop: true,
+      duckOnGoalHorn: false,
+      loop: false,
       currentTrack: null,
       selectedStyle: 'arena-rock',
       customPrompt: '',
@@ -271,20 +271,11 @@ export default function App() {
           if (newIndex !== -1) setSelectedClipIndex(newIndex);
         }
 
-        // Ensure transition list matches updated length - 1
+        // Set transitions to 0s (direct clean cuts without transitions)
         setTransitions((prevTrans) => {
           const trans = [...prevTrans];
-          const transitionStyles: Transition['type'][] = [
-            'wipe-left',
-            'crossfade',
-            'goal-flash',
-            'slide-push',
-            'zoom',
-            'glitch',
-          ];
           while (trans.length < updated.length - 1) {
-            const nextType = transitionStyles[trans.length % transitionStyles.length];
-            trans.push({ type: nextType, duration: 0.8 });
+            trans.push({ type: 'crossfade', duration: 0 });
           }
           return trans.slice(0, Math.max(0, updated.length - 1));
         });
@@ -323,7 +314,7 @@ export default function App() {
       setTransitions((prevTrans) => {
         const trans = [...prevTrans];
         while (trans.length < sorted.length - 1) {
-          trans.push({ type: 'wipe-left', duration: 0.8 });
+          trans.push({ type: 'crossfade', duration: 0 });
         }
         return trans.slice(0, Math.max(0, sorted.length - 1));
       });
@@ -338,7 +329,7 @@ export default function App() {
       setTransitions((prevTrans) => {
         const trans = [...prevTrans];
         while (trans.length < updated.length - 1) {
-          trans.push({ type: 'wipe-left', duration: 0.8 });
+          trans.push({ type: 'crossfade', duration: 0 });
         }
         return trans;
       });
@@ -451,6 +442,80 @@ export default function App() {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+    }
+  };
+
+  // Connect all clips and export as a single seamless MP4 video
+  const handleConnectAndExport = async () => {
+    if (clips.length === 0) return;
+
+    // Single clip -> instant download of original
+    if (clips.length === 1) {
+      handleDownloadOriginal(clips[0]);
+      return;
+    }
+
+    setIsExporting(true);
+    setIsExportCompleted(false);
+    setExportProgress(15);
+    setExportStatusText(`Connecting ${clips.length} clips with native high-speed video engine...`);
+    setIsExportModalOpen(true);
+
+    try {
+      const formData = new FormData();
+      const meta = clips.map((c) => ({
+        startTime: c.startTime || 0,
+        endTime: c.endTime && c.endTime > (c.startTime || 0) ? c.endTime : c.originalDuration || 0,
+      }));
+      formData.append('clipsMeta', JSON.stringify(meta));
+
+      for (let i = 0; i < clips.length; i++) {
+        const c = clips[i];
+        if (c.blob) {
+          const fname = c.name.includes('.') ? c.name : `${c.name}.mp4`;
+          formData.append('videos', c.blob, fname);
+        } else if (c.url) {
+          const r = await fetch(c.url);
+          const b = await r.blob();
+          formData.append('videos', b, `clip_${i}.mp4`);
+        }
+      }
+
+      setExportProgress(45);
+      setExportStatusText('Joining clips seamlessly with zero stutter and 100% original quality...');
+
+      const response = await fetch('/api/concat-videos', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Server connection failed: ${errText}`);
+      }
+
+      setExportProgress(90);
+      setExportStatusText('Finalizing connected video file...');
+
+      const connectedBlob = await response.blob();
+      setExportedBlob(connectedBlob);
+      setIsExportCompleted(true);
+      setIsExporting(false);
+      setExportProgress(100);
+      setExportStatusText(`Connected ${clips.length} clips successfully!`);
+
+      // Trigger download immediately
+      const downloadUrl = URL.createObjectURL(connectedBlob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = `connected-hockey-video-${Date.now()}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 15000);
+    } catch (err: any) {
+      console.warn('Native concat error, falling back to client canvas joiner:', err);
+      await handleStartCanvasRender();
     }
   };
 
@@ -574,7 +639,7 @@ export default function App() {
         onSignIn={() => setIsAuthModalOpen(true)}
         onSignOut={handleSignOut}
         onDownloadOriginal={() => handleDownloadOriginal()}
-        onExport={handleOpenExportModal}
+        onExport={handleConnectAndExport}
         onOpenUpload={handleOpenUpload}
         onClearProject={handleClearProject}
         isExporting={isExporting}
@@ -585,10 +650,10 @@ export default function App() {
 
       {/* Main Studio Viewport - strictly fits 100% monitor viewport without vertical scrolling */}
       <main className="flex-1 min-h-0 w-full px-2.5 sm:px-3 py-2 flex flex-col gap-2 overflow-hidden">
-        {/* Top Split: Video Player on the left, Overlays / Controls on the right */}
+        {/* Top Split: Video Player on the left, Connected Clips Sequence on the right */}
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-2.5 overflow-hidden">
-          {/* Main Stage Video Player (7 columns on desktop) */}
-          <div className="lg:col-span-7 xl:col-span-7 flex flex-col min-h-0 h-full overflow-hidden">
+          {/* Main Stage Video Player (8 columns on desktop) */}
+          <div className="lg:col-span-8 xl:col-span-8 flex flex-col min-h-0 h-full overflow-hidden">
             <VideoPlayer
               clips={clips}
               selectedClipIndex={selectedClipIndex}
@@ -618,15 +683,18 @@ export default function App() {
             />
           </div>
 
-          {/* Hockey Overlays, Scorebug, & Sound FX Config (5 columns on desktop) */}
-          <div className="lg:col-span-5 xl:col-span-5 flex flex-col min-h-0 h-full overflow-hidden">
-            <OverlayControls
-              settings={overlaySettings}
-              onChange={setOverlaySettings}
+          {/* Connected Clips Sequence Panel (4 columns on desktop) */}
+          <div className="lg:col-span-4 xl:col-span-4 flex flex-col min-h-0 h-full overflow-hidden">
+            <ClipSequencePanel
               clips={clips}
               selectedClipIndex={selectedClipIndex}
               onSelectClipIndex={setSelectedClipIndex}
               onUpdateClip={handleUpdateClip}
+              onRemoveClip={handleRemoveClip}
+              onMoveClip={handleMoveClip}
+              onConnectAndExport={handleConnectAndExport}
+              isExporting={isExporting}
+              onAddFiles={handleAddFiles}
             />
           </div>
         </div>

@@ -17,7 +17,6 @@ import {
   Loader2,
 } from 'lucide-react';
 import type { User } from 'firebase/auth';
-import { playGoalHorn } from '../lib/audio';
 
 interface NavbarProps {
   aspectRatio: AspectRatio;
@@ -346,18 +345,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
             )}
           </div>
-
-          {/* Goal horn sound test button */}
-          <button
-            id="nav-goal-horn-btn"
-            type="button"
-            onClick={() => playGoalHorn(2.5)}
-            title="Play Arena Goal Horn sound effect"
-            className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-red-400 bg-slate-800/80 hover:bg-slate-800 px-2 py-1 rounded-lg border border-slate-700 transition cursor-pointer ml-1"
-          >
-            <Volume2 className="w-3.5 h-3.5 text-red-500" />
-            <span className="hidden xl:inline">Horn FX</span>
-          </button>
         </div>
 
         {/* Center: Quick Aspect Ratio Switcher (Always accessible) */}
@@ -409,35 +396,31 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         </div>
 
-        {/* Right Side: Quick Export, Account connection & Fullscreen toggle */}
+        {/* Right Side: Connect & Export, Options & Fullscreen */}
         <div className="flex items-center gap-2 justify-end">
-          {/* Direct Download Original Untouched Video Button (100% Quality, Zero Render) */}
+          {/* Connect All Clips & Export Button */}
           <button
-            id="nav-download-original-btn"
-            type="button"
-            onClick={onDownloadOriginal || onExport}
-            disabled={clipsCount === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow cursor-pointer select-none bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-950/40 disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Download original video directly without re-rendering (100% Native Quality • Instant 0s • Bit-for-bit)"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span className="font-['Chakra_Petch'] tracking-wide">Download Original</span>
-            <span className="text-[9px] font-mono font-bold bg-emerald-950/80 text-emerald-300 px-1 py-0.2 rounded border border-emerald-700/50">
-              100% Native
-            </span>
-          </button>
-
-          {/* Export Options Modal Button */}
-          <button
-            id="nav-quick-export-btn"
+            id="nav-connect-export-btn"
             type="button"
             onClick={onExport}
-            disabled={clipsCount === 0}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white bg-slate-800/90 hover:bg-slate-700 border border-slate-700 transition cursor-pointer select-none disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Open Export & Save Options"
+            disabled={clipsCount === 0 || isExporting}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition shadow cursor-pointer select-none bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-950/40 disabled:opacity-40 disabled:cursor-not-allowed font-['Chakra_Petch']"
+            title="Connect all clips and export as a single seamless video"
           >
-            <Film className="w-3.5 h-3.5 text-sky-400" />
-            <span className="font-['Chakra_Petch'] hidden sm:inline">Export Options</span>
+            {isExporting ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Connecting Clips...</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-3.5 h-3.5" />
+                <span>{clipsCount > 1 ? `Connect & Export (${clipsCount})` : 'Export Video'}</span>
+                <span className="text-[9px] font-mono font-bold bg-emerald-950/80 text-emerald-300 px-1 py-0.2 rounded border border-emerald-700/50">
+                  100% Quality
+                </span>
+              </>
+            )}
           </button>
 
           {/* YouTube Auth Status */}
