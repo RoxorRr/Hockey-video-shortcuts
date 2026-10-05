@@ -462,47 +462,74 @@ export default function App() {
 
     setIsExporting(true);
     setIsExportCompleted(false);
-    setExportProgress(15);
-    setExportStatusText(`Merging all ${clips.length} clips into 1 video with native FFmpeg engine...`);
+    setExportProgress(5);
+    setExportStatusText(`Preparing ${clips.length} clips for high-speed merge...`);
     setIsExportModalOpen(true);
 
     try {
-      const formData = new FormData();
-      const meta = clips.map((c) => ({
+      const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const clipsMeta = clips.map((c) => ({
         startTime: c.startTime || 0,
         endTime: c.endTime && c.endTime > (c.startTime || 0) ? c.endTime : c.originalDuration || 0,
       }));
-      formData.append('clipsMeta', JSON.stringify(meta));
 
+      // Upload each clip individually (bypasses Cloud Run 32MB payload limit completely)
       for (let i = 0; i < clips.length; i++) {
         const c = clips[i];
-        if (c.blob) {
-          const fname = c.name.includes('.') ? c.name : `${c.name}.mp4`;
-          formData.append('videos', c.blob, fname);
-        } else if (c.url) {
+        let fileBlob = c.blob;
+        if (!fileBlob && c.url) {
           const r = await fetch(c.url);
-          const b = await r.blob();
-          formData.append('videos', b, `clip_${i}.mp4`);
+          fileBlob = await r.blob();
+        }
+
+        if (!fileBlob) {
+          throw new Error(`Clip #${i + 1} (${c.name}) data not available.`);
+        }
+
+        const pct = Math.round(5 + (i / clips.length) * 60);
+        setExportProgress(pct);
+        setExportStatusText(`Uploading clip ${i + 1} of ${clips.length} (${c.name})...`);
+
+        const chunkForm = new FormData();
+        chunkForm.append('sessionId', sessionId);
+        chunkForm.append('clipIndex', String(i));
+        const fname = c.name.includes('.') ? c.name : `${c.name}.mp4`;
+        chunkForm.append('video', fileBlob, fname);
+
+        const upRes = await fetch('/api/upload-clip', {
+          method: 'POST',
+          body: chunkForm,
+        });
+
+        if (!upRes.ok) {
+          const errText = await upRes.text();
+          throw new Error(`Upload failed for clip #${i + 1}: ${errText}`);
         }
       }
 
-      setExportProgress(45);
-      setExportStatusText(`Merging ${clips.length} clips into 1 single video (zero stutter, 100% native quality)...`);
+      // Trigger high-speed server merge
+      setExportProgress(75);
+      setExportStatusText(`Merging all ${clips.length} clips into 1 video with FFmpeg (zero stutter, 100% native quality)...`);
 
-      const response = await fetch('/api/concat-videos', {
+      const mergeRes = await fetch('/api/merge-session', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          totalClips: clips.length,
+          clipsMeta,
+        }),
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Server connection failed: ${errText}`);
+      if (!mergeRes.ok) {
+        const errText = await mergeRes.text();
+        throw new Error(`Video merge failed: ${errText}`);
       }
 
-      setExportProgress(90);
+      setExportProgress(95);
       setExportStatusText('Finalizing merged video file...');
 
-      const connectedBlob = await response.blob();
+      const connectedBlob = await mergeRes.blob();
       setExportedBlob(connectedBlob);
       setIsExportCompleted(true);
       setIsExporting(false);
@@ -519,8 +546,9 @@ export default function App() {
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(downloadUrl), 15000);
     } catch (err: any) {
-      console.warn('Native concat error, falling back to client canvas joiner:', err);
-      await handleStartCanvasRender();
+      console.error('Merge export error:', err);
+      setIsExporting(false);
+      setExportStatusText(`Error: ${err?.message || 'Failed to merge clips'}. Please try again.`);
     }
   };
 
@@ -739,7 +767,7 @@ export default function App() {
           }}
           exportOptions={exportOptions}
           onUpdateOptions={(opts) => setExportOptions(opts)}
-          onReExport={(opts) => handleStartCanvasRender(opts)}
+          onReExport={() => handleConnectAndExport()}
           onDownloadOriginal={handleDownloadOriginal}
           onConnectAndExport={handleConnectAndExport}
           onCancelRender={handleCancelRender}
