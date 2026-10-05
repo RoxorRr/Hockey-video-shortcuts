@@ -473,7 +473,9 @@ export default function App() {
         endTime: c.endTime && c.endTime > (c.startTime || 0) ? c.endTime : c.originalDuration || 0,
       }));
 
-      // Upload each clip individually (bypasses Cloud Run 32MB payload limit completely)
+      // Upload each clip in 4MB chunks (100% resilient to Cloud Run 32MB payload limit)
+      const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB chunk size
+
       for (let i = 0; i < clips.length; i++) {
         const c = clips[i];
         let fileBlob = c.blob;
@@ -486,29 +488,44 @@ export default function App() {
           throw new Error(`Clip #${i + 1} (${c.name}) data not available.`);
         }
 
-        const pct = Math.round(5 + (i / clips.length) * 60);
-        setExportProgress(pct);
-        setExportStatusText(`Uploading clip ${i + 1} of ${clips.length} (${c.name})...`);
+        const fileSize = fileBlob.size;
+        const totalChunks = Math.max(1, Math.ceil(fileSize / CHUNK_SIZE));
 
-        const chunkForm = new FormData();
-        chunkForm.append('sessionId', sessionId);
-        chunkForm.append('clipIndex', String(i));
-        const fname = c.name.includes('.') ? c.name : `${c.name}.mp4`;
-        chunkForm.append('video', fileBlob, fname);
+        for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+          const start = chunkIdx * CHUNK_SIZE;
+          const end = Math.min(fileSize, start + CHUNK_SIZE);
+          const chunkBlob = fileBlob.slice(start, end);
 
-        const upRes = await fetch('/api/upload-clip', {
-          method: 'POST',
-          body: chunkForm,
-        });
+          const chunkForm = new FormData();
+          chunkForm.append('sessionId', sessionId);
+          chunkForm.append('clipIndex', String(i));
+          chunkForm.append('chunkIndex', String(chunkIdx));
+          chunkForm.append('totalChunks', String(totalChunks));
+          chunkForm.append('chunk', chunkBlob, `chunk_${chunkIdx}.bin`);
 
-        if (!upRes.ok) {
-          const errText = await upRes.text();
-          throw new Error(`Upload failed for clip #${i + 1}: ${errText}`);
+          const upRes = await fetch('/api/upload-chunk', {
+            method: 'POST',
+            body: chunkForm,
+          });
+
+          if (!upRes.ok) {
+            const errText = await upRes.text();
+            throw new Error(`Upload error on clip #${i + 1} (${c.name}, chunk ${chunkIdx + 1}/${totalChunks}): ${errText}`);
+          }
+
+          const clipFraction = (chunkIdx + 1) / totalChunks;
+          const overallPct = Math.round(5 + ((i + clipFraction) / clips.length) * 75);
+          setExportProgress(overallPct);
+          setExportStatusText(
+            totalChunks > 1
+              ? `Uploading clip ${i + 1} of ${clips.length} (${c.name} • part ${chunkIdx + 1}/${totalChunks})...`
+              : `Uploading clip ${i + 1} of ${clips.length} (${c.name})...`
+          );
         }
       }
 
       // Trigger high-speed server merge
-      setExportProgress(75);
+      setExportProgress(82);
       setExportStatusText(`Merging all ${clips.length} clips into 1 video with FFmpeg (zero stutter, 100% native quality)...`);
 
       const mergeRes = await fetch('/api/merge-session', {
@@ -526,7 +543,7 @@ export default function App() {
         throw new Error(`Video merge failed: ${errText}`);
       }
 
-      setExportProgress(95);
+      setExportProgress(96);
       setExportStatusText('Finalizing merged video file...');
 
       const connectedBlob = await mergeRes.blob();
@@ -545,10 +562,12 @@ export default function App() {
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(downloadUrl), 15000);
+      return connectedBlob;
     } catch (err: any) {
       console.error('Merge export error:', err);
       setIsExporting(false);
       setExportStatusText(`Error: ${err?.message || 'Failed to merge clips'}. Please try again.`);
+      return null;
     }
   };
 
@@ -613,12 +632,20 @@ export default function App() {
     setExportStatusText('Cancelled render — original video preserved.');
   };
 
-  // Direct YouTube Upload action (uses untouched original video)
-  const handleOpenUpload = () => {
+  // Direct YouTube Upload action (merges all clips together if multiple)
+  const handleOpenUpload = async () => {
     if (clips.length === 0) return;
-    const originalBlob = clips[0]?.blob || exportedBlob || null;
-    if (originalBlob) {
-      setExportedBlob(originalBlob);
+    if (clips.length > 1 && !exportedBlob) {
+      const merged = await handleConnectAndExport();
+      if (merged) {
+        setExportedBlob(merged);
+        setIsUploadModalOpen(true);
+      }
+      return;
+    }
+    const blobToUpload = exportedBlob || clips[0]?.blob || null;
+    if (blobToUpload) {
+      setExportedBlob(blobToUpload);
     }
     setIsUploadModalOpen(true);
   };

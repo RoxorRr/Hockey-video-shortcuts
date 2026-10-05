@@ -147,7 +147,38 @@ async function startServer() {
     res.json({ status: "ok", service: "hockey-highlight-editor" });
   });
 
-  // 1. Upload a single clip chunk (bypasses Cloud Run 32MB payload limit completely)
+  // 1. Upload a 4MB chunk (100% resilient to Cloud Run 32MB payload limits)
+  app.post("/api/upload-chunk", upload.single("chunk"), async (req, res) => {
+    const file = req.file;
+    const sessionId = (req.body.sessionId as string) || "default";
+    const clipIndex = parseInt(req.body.clipIndex as string, 10);
+    const chunkIndex = parseInt(req.body.chunkIndex as string, 10);
+
+    if (!file) {
+      return res.status(400).json({ error: "No chunk file provided" });
+    }
+
+    const sessionDir = path.join(os.tmpdir(), "puckcut-sessions", sessionId);
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true });
+    }
+
+    const targetClipPath = path.join(sessionDir, `raw_clip_${clipIndex}.mp4`);
+    const chunkData = fs.readFileSync(file.path);
+    try {
+      fs.unlinkSync(file.path);
+    } catch {}
+
+    if (chunkIndex === 0) {
+      fs.writeFileSync(targetClipPath, chunkData);
+    } else {
+      fs.appendFileSync(targetClipPath, chunkData);
+    }
+
+    res.json({ status: "ok", clipIndex, chunkIndex });
+  });
+
+  // 2. Upload a single clip chunk (bypasses Cloud Run 32MB payload limit for < 30MB files)
   app.post("/api/upload-clip", upload.single("video"), async (req, res) => {
     const file = req.file;
     const sessionId = (req.body.sessionId as string) || "default";
@@ -163,12 +194,15 @@ async function startServer() {
     }
 
     const targetClipPath = path.join(sessionDir, `raw_clip_${clipIndex}.mp4`);
-    fs.renameSync(file.path, targetClipPath);
+    fs.copyFileSync(file.path, targetClipPath);
+    try {
+      fs.unlinkSync(file.path);
+    } catch {}
 
     res.json({ status: "ok", clipIndex, size: file.size });
   });
 
-  // 2. Merge all uploaded session clips into one single stutter-free video
+  // 3. Merge all uploaded session clips into one single stutter-free video
   app.post("/api/merge-session", async (req, res) => {
     const sessionId = req.body.sessionId as string;
     const totalClips = parseInt(req.body.totalClips as string, 10) || 0;

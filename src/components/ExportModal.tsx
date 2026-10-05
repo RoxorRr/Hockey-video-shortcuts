@@ -339,6 +339,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   id="export-to-youtube-btn"
                   type="button"
                   onClick={() => {
+                    if (clips.length > 1 && !exportedBlob && onConnectAndExport) {
+                      onConnectAndExport();
+                      return;
+                    }
                     onClose();
                     onProceedToYouTube(exportedBlob || primaryBlob || undefined);
                   }}
