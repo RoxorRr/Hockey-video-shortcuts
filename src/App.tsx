@@ -414,8 +414,13 @@ export default function App() {
     setSelectedClipIndex(index);
   };
 
-  // Download untouched original video (0-second instant download, 100% native quality, zero re-rendering)
+  // Download video: merges all clips into 1 single video if multiple, or downloads single file
   const handleDownloadOriginal = (targetClip?: VideoClip) => {
+    if (!targetClip && clips.length > 1) {
+      handleConnectAndExport();
+      return;
+    }
+
     const clip = targetClip || clips[0];
     if (!clip) return;
 
@@ -458,7 +463,7 @@ export default function App() {
     setIsExporting(true);
     setIsExportCompleted(false);
     setExportProgress(15);
-    setExportStatusText(`Connecting ${clips.length} clips with native high-speed video engine...`);
+    setExportStatusText(`Merging all ${clips.length} clips into 1 video with native FFmpeg engine...`);
     setIsExportModalOpen(true);
 
     try {
@@ -482,7 +487,7 @@ export default function App() {
       }
 
       setExportProgress(45);
-      setExportStatusText('Joining clips seamlessly with zero stutter and 100% original quality...');
+      setExportStatusText(`Merging ${clips.length} clips into 1 single video (zero stutter, 100% native quality)...`);
 
       const response = await fetch('/api/concat-videos', {
         method: 'POST',
@@ -495,20 +500,20 @@ export default function App() {
       }
 
       setExportProgress(90);
-      setExportStatusText('Finalizing connected video file...');
+      setExportStatusText('Finalizing merged video file...');
 
       const connectedBlob = await response.blob();
       setExportedBlob(connectedBlob);
       setIsExportCompleted(true);
       setIsExporting(false);
       setExportProgress(100);
-      setExportStatusText(`Connected ${clips.length} clips successfully!`);
+      setExportStatusText(`Merged all ${clips.length} clips into 1 video successfully!`);
 
-      // Trigger download immediately
+      // Trigger download immediately of the ONE merged video
       const downloadUrl = URL.createObjectURL(connectedBlob);
       const a = document.createElement('a');
       a.href = downloadUrl;
-      a.download = `connected-hockey-video-${Date.now()}.mp4`;
+      a.download = `merged-hockey-video-${clips.length}-clips-${Date.now()}.mp4`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -713,7 +718,7 @@ export default function App() {
             onSelectClipForEdit={handleSelectClipForEdit}
             selectedClipIndex={selectedClipIndex}
             onSortChronological={handleSortChronological}
-            onDownloadOriginalClip={handleDownloadOriginal}
+            onConnectAndExport={handleConnectAndExport}
           />
         </div>
       </main>
@@ -736,6 +741,7 @@ export default function App() {
           onUpdateOptions={(opts) => setExportOptions(opts)}
           onReExport={(opts) => handleStartCanvasRender(opts)}
           onDownloadOriginal={handleDownloadOriginal}
+          onConnectAndExport={handleConnectAndExport}
           onCancelRender={handleCancelRender}
           clips={clips}
           aspectRatio={aspectRatio}

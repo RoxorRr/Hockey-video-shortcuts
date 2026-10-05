@@ -18,7 +18,7 @@ if (!fs.existsSync(uploadDir)) {
 }
 const upload = multer({
   dest: uploadDir,
-  limits: { fileSize: 4 * 1024 * 1024 * 1024 }, // up to 4 GB
+  limits: { fileSize: 4 * 1024 * 1024 * 1024, files: 500, fields: 200 }, // up to 4 GB, 500 files
 });
 
 let aiClient: GoogleGenAI | null = null;
@@ -64,7 +64,7 @@ async function startServer() {
 
   // High-performance native FFmpeg clip concatenation
   // Connects all clips seamlessly with 100% original quality, zero stutter, and zero dropped frames
-  app.post("/api/concat-videos", upload.array("videos"), async (req, res) => {
+  app.post("/api/concat-videos", upload.array("videos", 300), async (req, res) => {
     const uploadedFiles = (req.files as Express.Multer.File[]) || [];
     if (uploadedFiles.length === 0) {
       return res.status(400).json({ error: "No video files provided" });

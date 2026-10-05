@@ -24,7 +24,7 @@ interface TimelineProps {
   onSelectClipForEdit: (clip: VideoClip, index: number) => void;
   selectedClipIndex: number | null;
   onSortChronological?: () => void;
-  onDownloadOriginalClip?: (clip: VideoClip) => void;
+  onConnectAndExport?: () => void;
 }
 
 export const Timeline: React.FC<TimelineProps> = ({
@@ -36,7 +36,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onSelectClipForEdit,
   selectedClipIndex,
   onSortChronological,
-  onDownloadOriginalClip,
+  onConnectAndExport,
 }) => {
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -81,28 +81,26 @@ export const Timeline: React.FC<TimelineProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
-          {clips.length > 0 && onDownloadOriginalClip && (
+          {clips.length > 0 && onConnectAndExport && (
             <button
-              id="timeline-download-original-btn"
+              id="timeline-merge-download-btn"
               type="button"
-              onClick={() => {
-                if (clips.length === 1) {
-                  onDownloadOriginalClip(clips[0]);
-                } else {
-                  clips.forEach((c, idx) => {
-                    setTimeout(() => onDownloadOriginalClip(c), idx * 300);
-                  });
-                }
-              }}
-              title="Download untouched original video (100% Quality • Zero re-encoding • Bit-for-bit)"
-              className="flex items-center gap-1 bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 hover:text-emerald-200 px-2 py-1 rounded text-xs font-semibold border border-emerald-700/60 transition shadow-xs cursor-pointer"
+              onClick={onConnectAndExport}
+              title={
+                clips.length === 1
+                  ? "Download original video file"
+                  : `Merge all ${clips.length} clips into 1 seamless video and download`
+              }
+              className="flex items-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-2.5 py-1 rounded text-xs font-bold font-['Chakra_Petch'] transition shadow shadow-emerald-950/40 cursor-pointer"
             >
-              <Download className="w-3 h-3 text-emerald-400" />
-              <span className="hidden sm:inline">
-                {clips.length === 1 ? 'Download Original' : 'Download All Originals'}
+              <Download className="w-3.5 h-3.5 text-white" />
+              <span>
+                {clips.length === 1
+                  ? 'Download Video'
+                  : `Merge All (${clips.length} Clips → 1 Video)`}
               </span>
-              <span className="text-[10px] text-emerald-400/80 font-mono hidden md:inline">
-                (100% Quality)
+              <span className="text-[10px] text-emerald-200/90 font-mono hidden md:inline">
+                (1 Single File)
               </span>
             </button>
           )}
@@ -239,20 +237,6 @@ export const Timeline: React.FC<TimelineProps> = ({
                       </div>
 
                       <div className="flex items-center gap-0.5">
-                        {onDownloadOriginalClip && (
-                          <button
-                            id={`download-clip-btn-${index}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDownloadOriginalClip(clip);
-                            }}
-                            title="Download untouched original video (100% native quality • no re-encoding)"
-                            className="p-0.5 text-slate-400 hover:text-emerald-400 rounded hover:bg-slate-800 transition cursor-pointer"
-                          >
-                            <Download className="w-3 h-3" />
-                          </button>
-                        )}
-
                         <button
                           id={`edit-clip-btn-${index}`}
                           onClick={(e) => {

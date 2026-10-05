@@ -241,17 +241,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                     Export &amp; Project
                   </div>
 
-                  {/* Download Original Video Button */}
+                  {/* Download Merged Video Button */}
                   <button
                     id="export-video-btn"
                     type="button"
                     onClick={() => {
                       setIsMenuOpen(false);
-                      if (onDownloadOriginal) {
-                        onDownloadOriginal();
-                      } else {
-                        onExport();
-                      }
+                      onExport();
                     }}
                     disabled={clipsCount === 0}
                     className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800/90 text-slate-200 hover:text-white border border-slate-700/80 hover:border-slate-600 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer group shadow"
@@ -262,13 +258,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                       </div>
                       <div className="text-left">
                         <div className="text-xs font-bold font-['Chakra_Petch'] tracking-wide flex items-center gap-1.5 text-white">
-                          Download Original Video
+                          {clipsCount > 1 ? `Merge All (${clipsCount} Clips → 1 Video)` : 'Download Video'}
                           <span className="text-[9px] font-mono font-bold bg-emerald-950 text-emerald-300 px-1 py-0.2 rounded border border-emerald-700/50">
                             100% Quality
                           </span>
                         </div>
                         <div className="text-[10px] text-slate-400">
-                          Leaves video untouched bit-for-bit • No re-rendering
+                          {clipsCount > 1
+                            ? `Combines all ${clipsCount} clips into 1 single video`
+                            : 'Untouched bit-for-bit video • Zero re-encoding'}
                         </div>
                       </div>
                     </div>
@@ -405,17 +403,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={onExport}
             disabled={clipsCount === 0 || isExporting}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition shadow cursor-pointer select-none bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-950/40 disabled:opacity-40 disabled:cursor-not-allowed font-['Chakra_Petch']"
-            title="Connect all clips and export as a single seamless video"
+            title={clipsCount > 1 ? `Merge all ${clipsCount} clips into 1 video` : 'Export video'}
           >
             {isExporting ? (
               <>
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Connecting Clips...</span>
+                <span>Merging Clips...</span>
               </>
             ) : (
               <>
                 <Download className="w-3.5 h-3.5" />
-                <span>{clipsCount > 1 ? `Connect & Export (${clipsCount})` : 'Export Video'}</span>
+                <span>{clipsCount > 1 ? `Merge All (${clipsCount} Clips → 1 Video)` : 'Download Video'}</span>
                 <span className="text-[9px] font-mono font-bold bg-emerald-950/80 text-emerald-300 px-1 py-0.2 rounded border border-emerald-700/50">
                   100% Quality
                 </span>

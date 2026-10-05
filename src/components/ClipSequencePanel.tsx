@@ -220,10 +220,12 @@ export const ClipSequencePanel: React.FC<ClipSequencePanelProps> = ({
           className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-['Chakra_Petch'] font-bold text-xs uppercase tracking-wider py-3 rounded-xl shadow-lg shadow-emerald-950/60 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <Download className="w-4 h-4" />
-          <span>{clips.length > 1 ? `Connect & Export (${clips.length} Clips)` : 'Export Video'}</span>
+          <span>{clips.length > 1 ? `Merge All (${clips.length} Clips → 1 Video)` : 'Download Video'}</span>
         </button>
         <p className="text-[10px] text-center text-slate-400 mt-1.5 font-mono">
-          Zero transitions &bull; 100% native quality &bull; Instant download
+          {clips.length > 1
+            ? `All ${clips.length} clips merged into 1 single video • 100% native quality`
+            : 'Zero transitions • 100% native quality • Instant download'}
         </p>
       </div>
     </div>

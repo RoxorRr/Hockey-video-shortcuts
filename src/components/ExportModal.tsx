@@ -29,6 +29,7 @@ interface ExportModalProps {
   onUpdateOptions?: (opts: ExportOptions) => void;
   onReExport?: (opts: ExportOptions) => void;
   onDownloadOriginal?: (clip?: VideoClip) => void;
+  onConnectAndExport?: () => void;
   onCancelRender?: () => void;
   clips?: VideoClip[];
   aspectRatio?: AspectRatio;
@@ -47,6 +48,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   onUpdateOptions,
   onReExport,
   onDownloadOriginal,
+  onConnectAndExport,
   onCancelRender,
   clips = [],
   aspectRatio = '16:9',
@@ -114,12 +116,29 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }
   };
 
-  const handleDownloadAll = () => {
-    clips.forEach((clip, i) => {
-      setTimeout(() => {
-        handleDownloadSingle(clip);
-      }, i * 300);
-    });
+  const handleDownloadCombined = () => {
+    if (exportedBlob) {
+      const url = URL.createObjectURL(exportedBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = clips.length > 1
+        ? `merged-video-${clips.length}-clips-${Date.now()}.mp4`
+        : `${clips[0]?.name || 'video'}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      return;
+    }
+
+    if (clips.length > 1 && onConnectAndExport) {
+      onConnectAndExport();
+      return;
+    }
+
+    if (clips.length > 0) {
+      handleDownloadSingle(clips[0]);
+    }
   };
 
   return (
@@ -277,14 +296,18 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
               {/* Main Actions */}
               <div className="flex flex-col sm:flex-row gap-3 pt-1">
-                {/* Download Original Video Button */}
+                {/* Download Merged / Original Video Button */}
                 <button
                   type="button"
-                  onClick={() => handleDownloadSingle(primaryClip || clips[0])}
+                  onClick={handleDownloadCombined}
                   className="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-emerald-950/50 cursor-pointer font-['Chakra_Petch']"
                 >
                   <Download className="w-4 h-4 text-white" />
-                  <span>Download Original Video ({primarySizeMB} MB)</span>
+                  <span>
+                    {clips.length > 1
+                      ? `Download Merged Video (All ${clips.length} Clips → 1 Video)`
+                      : `Download Video (${primarySizeMB} MB)`}
+                  </span>
                 </button>
 
                 {/* Upload to YouTube Button */}
@@ -298,54 +321,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   className="flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 text-white px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-red-950/50 font-['Chakra_Petch'] cursor-pointer"
                 >
                   <Upload className="w-4 h-4" />
-                  <span>Upload Original to YouTube</span>
+                  <span>Upload to YouTube</span>
                 </button>
               </div>
-
-              {/* Multiple Clips Download Options if more than 1 clip on timeline */}
-              {clips.length > 1 && (
-                <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider font-['Chakra_Petch'] flex items-center gap-1.5">
-                      <Film className="w-3.5 h-3.5 text-sky-400" />
-                      Individual Original Video Clips ({clips.length})
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleDownloadAll}
-                      className="text-[10px] text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1 cursor-pointer"
-                    >
-                      <FolderDown className="w-3 h-3" />
-                      Download All ({totalSourceSizeMB} MB)
-                    </button>
-                  </div>
-
-                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                    {clips.map((clip, idx) => (
-                      <div
-                        key={clip.id || idx}
-                        className="flex items-center justify-between bg-slate-900/90 px-2.5 py-1.5 rounded-lg border border-slate-800 text-xs"
-                      >
-                        <div className="truncate max-w-[240px]">
-                          <span className="font-semibold text-white truncate block">{clip.name}</span>
-                          <span className="text-[10px] text-slate-400 font-mono">
-                            {clip.blob ? `${(clip.blob.size / (1024 * 1024)).toFixed(1)} MB` : ''} •{' '}
-                            {clip.originalDuration.toFixed(1)}s
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadSingle(clip)}
-                          className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 rounded text-[11px] font-bold transition cursor-pointer"
-                        >
-                          <Download className="w-3 h-3" />
-                          <span>Download</span>
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               {/* Optional Canvas Re-encode Section (Secondary & Opt-in) */}
               <div className="border-t border-slate-800/80 pt-3">
