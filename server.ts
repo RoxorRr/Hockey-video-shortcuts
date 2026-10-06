@@ -1,8 +1,11 @@
 import express from "express";
 import path from "path";
+import os from "os";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
+import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
+import { handleFfmpegExport } from "./src/server/ffmpegExporter";
 
 dotenv.config();
 
@@ -25,10 +28,18 @@ async function startServer() {
 
   app.use(express.json());
 
+  const upload = multer({
+    dest: path.join(os.tmpdir(), "hockey_uploads"),
+    limits: { fileSize: 500 * 1024 * 1024 }, // 500 MB per file
+  });
+
   // Health check endpoint
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", service: "hockey-highlight-editor" });
   });
+
+  // Server-Side FFmpeg Zero-Stutter Export Endpoint
+  app.post("/api/export-ffmpeg", upload.any(), handleFfmpegExport);
 
   // AI Sports Music Composition Blueprint Endpoint
   app.post("/api/generate-sports-music-plan", async (req, res) => {

@@ -166,9 +166,12 @@ export interface YouTubeUploadResult {
   title: string;
 }
 
+export type ExportEngine = 'webcodecs' | 'ffmpeg' | 'realtime';
+
 export type ExportQualityPreset = 'source' | '4k' | '1080p' | '720p';
 
 export interface ExportOptions {
+  engine?: ExportEngine;
   qualityPreset?: ExportQualityPreset;
   fps?: 60 | 30;
   bitrate?: number; // in bps

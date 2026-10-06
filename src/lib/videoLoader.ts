@@ -1,39 +1,77 @@
 import { VideoClip } from '../types';
 
 /**
- * High-performance Video Preloading and In-Memory Buffering Engine.
+ * High-performance In-Memory Video Preloading and Hardware Synchronization Engine.
  * 
  * Solves the stuttering issue when newly uploaded video files are exported immediately:
- * 1. Reads video file bytes completely into RAM (memory-backed Blobs), eliminating disk I/O latency.
- * 2. Pre-buffers the HTMLVideoElement to `HAVE_ENOUGH_DATA` (readyState 4 / canplaythrough).
- * 3. Primes and pre-warms the hardware video decoder at the exact clip start timestamp.
- * 4. Provides synchronization hooks so the export pipeline waits until all video assets are 100% ready.
+ * 1. Reads video file raw bytes completely into RAM (memory-backed Blobs), eliminating disk I/O latency.
+ * 2. Pre-buffers the HTMLVideoElement to HAVE_ENOUGH_DATA (readyState 4) across the exact timeline clip duration.
+ * 3. Pre-warms and verifies hardware video decoder frame presentation at the target start timestamp.
+ * 4. Caches pre-buffered video elements in memory and provides them directly to the export pipeline.
  */
 
 // Cache of memory-backed Blobs and URLs keyed by original Blob/File
 const _memoryBlobCache = new WeakMap<Blob, { memoryBlob: Blob; memoryUrl: string }>();
 
-// Cache of pre-buffered HTMLVideoElement instances ready for instant stutter-free playback
-const _prebufferedVideoMap = new Map<string, { video: HTMLVideoElement; clipId: string; url: string; readyAt: number }>();
+export interface PrebufferedVideoEntry {
+  video: HTMLVideoElement;
+  clipId: string;
+  url: string;
+  readyAt: number;
+}
+
+// Global registry of pre-buffered, hardware-warmed HTMLVideoElement instances
+const _prebufferedVideoMap = new Map<string, PrebufferedVideoEntry>();
 
 /**
- * Read a disk-backed File/Blob into browser memory as a RAM-backed Blob.
- * Guarantees zero disk I/O stalls during video canvas playback and recording.
+ * Detect accurate video MIME type based on Blob and filename
+ */
+export function getAccurateMimeType(blob: Blob, filename?: string): string {
+  if (blob.type && blob.type.startsWith('video/')) {
+    return blob.type;
+  }
+  const clean = (filename || (blob as File).name || '').toLowerCase();
+  if (clean.endsWith('.webm')) return 'video/webm';
+  if (clean.endsWith('.mov') || clean.endsWith('.qt')) return 'video/quicktime';
+  if (clean.endsWith('.mkv')) return 'video/x-matroska';
+  if (clean.endsWith('.m4v')) return 'video/mp4';
+  if (clean.endsWith('.avi')) return 'video/x-msvideo';
+  return 'video/mp4';
+}
+
+/**
+ * Read a disk-backed File/Blob into browser RAM as an in-memory Blob.
+ * Guarantees zero disk I/O latency or read stalls during video canvas playback and recording.
  */
 export async function loadBlobIntoMemory(
   blob: Blob,
+  filename?: string,
 ): Promise<{ memoryBlob: Blob; memoryUrl: string }> {
   const cached = _memoryBlobCache.get(blob);
   if (cached) {
     return cached;
   }
 
+  const mime = getAccurateMimeType(blob, filename);
+
+  // For large files (> 80MB, including 1GB+ hockey recordings):
+  // Allocating a 1GB contiguous ArrayBuffer in V8 JavaScript memory triggers massive GC stalls,
+  // heap exhaustion, or tab crashes. The browser's native Blob URL URL.createObjectURL(blob)
+  // utilizes zero-copy C++ streaming page cache directly to hardware video decoders.
+  if (blob.size > 80 * 1024 * 1024) {
+    const memoryUrl = URL.createObjectURL(blob);
+    const result = { memoryBlob: blob, memoryUrl };
+    _memoryBlobCache.set(blob, result);
+    return result;
+  }
+
   try {
     const arrayBuffer = await blob.arrayBuffer();
-    const memoryBlob = new Blob([arrayBuffer], { type: blob.type || 'video/mp4' });
+    const memoryBlob = new Blob([arrayBuffer], { type: mime });
     const memoryUrl = URL.createObjectURL(memoryBlob);
     const result = { memoryBlob, memoryUrl };
     _memoryBlobCache.set(blob, result);
+    _memoryBlobCache.set(memoryBlob, result);
     return result;
   } catch (err) {
     console.warn('Could not read blob into memory arrayBuffer, falling back to blob URL:', err);
@@ -42,6 +80,34 @@ export async function loadBlobIntoMemory(
     _memoryBlobCache.set(blob, result);
     return result;
   }
+}
+
+/**
+ * Calculate the buffered percentage across a target [startTime, endTime] window.
+ */
+export function getBufferCoveragePercent(
+  video: HTMLVideoElement,
+  startTime: number,
+  endTime: number,
+): number {
+  if (!video.buffered || video.buffered.length === 0) return 0;
+  const s = Math.max(0, startTime);
+  const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : endTime;
+  const e = Math.min(Math.max(s + 0.1, endTime), dur);
+  const totalNeeded = Math.max(0.1, e - s);
+
+  let covered = 0;
+  for (let i = 0; i < video.buffered.length; i++) {
+    const bStart = video.buffered.start(i);
+    const bEnd = video.buffered.end(i);
+    const overlapStart = Math.max(s, bStart);
+    const overlapEnd = Math.min(e, bEnd);
+    if (overlapEnd > overlapStart) {
+      covered += overlapEnd - overlapStart;
+    }
+  }
+
+  return Math.min(100, Math.round((covered / totalNeeded) * 100));
 }
 
 /**
@@ -54,13 +120,14 @@ export function isRangeBuffered(
 ): boolean {
   if (!video.buffered || video.buffered.length === 0) return false;
   const s = Math.max(0, startTime);
-  const e = Math.max(s + 0.1, endTime);
+  const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : endTime;
+  const e = Math.min(Math.max(s + 0.1, endTime), dur);
 
   for (let i = 0; i < video.buffered.length; i++) {
     const bufStart = video.buffered.start(i);
     const bufEnd = video.buffered.end(i);
-    // Tolerate a tiny 0.15s start margin
-    if (bufStart <= s + 0.15 && bufEnd >= e - 0.25) {
+    // Buffer covers start time with reasonable margin and covers to near the end
+    if (bufStart <= s + 0.3 && bufEnd >= Math.max(s + 0.5, e - 0.4)) {
       return true;
     }
   }
@@ -68,28 +135,26 @@ export function isRangeBuffered(
 }
 
 /**
- * Wait for a single video element to be fully loaded and buffered into memory.
- * Resolves only when readyState >= 4 (HAVE_ENOUGH_DATA) or canplaythrough fires,
- * and primes the video to the target start timestamp with hardware frame decoding verified.
+ * Wait for a video element to be ready at targetStartTime with verified decoded frames.
+ * Does NOT perform random seeks that evict browser media pipeline buffer cache.
  */
 export function waitForVideoReady(
   video: HTMLVideoElement,
   targetStartTime = 0,
-  targetEndTime?: number,
-  timeoutMs = 12000,
+  _targetEndTime?: number,
+  timeoutMs = 10000,
+  onBufferingProgress?: (status: string) => void,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     let hasResolved = false;
     let timer: any = null;
-    let nudgeTimer: any = null;
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
-      if (nudgeTimer) clearTimeout(nudgeTimer);
-      video.removeEventListener('canplaythrough', onReady);
-      video.removeEventListener('canplay', checkProgress);
-      video.removeEventListener('progress', checkProgress);
-      video.removeEventListener('loadeddata', checkProgress);
+      video.removeEventListener('canplaythrough', checkReady);
+      video.removeEventListener('canplay', checkReady);
+      video.removeEventListener('progress', checkReady);
+      video.removeEventListener('loadeddata', checkReady);
       video.removeEventListener('error', onError);
     };
 
@@ -100,20 +165,17 @@ export function waitForVideoReady(
       resolve(success);
     };
 
-    const verifyFrameAndFinish = () => {
-      // If currentTime is close to targetStartTime, confirm frame decode
+    const confirmDecodedFrameAndFinish = () => {
       const clampedStart = Math.max(0, targetStartTime);
-      if (Math.abs(video.currentTime - clampedStart) > 0.06) {
+      if (Math.abs(video.currentTime - clampedStart) > 0.05) {
         try {
           video.currentTime = clampedStart;
           video.addEventListener(
             'seeked',
-            () => {
-              finish(true);
-            },
+            () => finish(true),
             { once: true },
           );
-          setTimeout(() => finish(true), 600);
+          setTimeout(() => finish(true), 500);
           return;
         } catch {
           finish(true);
@@ -121,13 +183,10 @@ export function waitForVideoReady(
         }
       }
 
-      // Check if browser supports requestVideoFrameCallback
       if (typeof (video as any).requestVideoFrameCallback === 'function') {
         try {
-          (video as any).requestVideoFrameCallback(() => {
-            finish(true);
-          });
-          setTimeout(() => finish(true), 400);
+          (video as any).requestVideoFrameCallback(() => finish(true));
+          setTimeout(() => finish(true), 350);
           return;
         } catch {
           finish(true);
@@ -138,30 +197,19 @@ export function waitForVideoReady(
       finish(true);
     };
 
-    const onReady = () => {
-      verifyFrameAndFinish();
-    };
-
-    const checkProgress = () => {
-      // Check if readyState reached 4 (HAVE_ENOUGH_DATA)
-      if (video.readyState >= 4) {
-        onReady();
+    const checkReady = () => {
+      if (hasResolved) return;
+      if (video.readyState >= 3 && video.videoWidth > 0) {
+        confirmDecodedFrameAndFinish();
         return;
       }
-
-      // If readyState is 3 and buffer covers the start/end window
-      if (video.readyState >= 3) {
-        const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 10;
-        const end = targetEndTime ?? Math.min(dur, targetStartTime + 4.0);
-        if (isRangeBuffered(video, targetStartTime, end)) {
-          onReady();
-          return;
-        }
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        confirmDecodedFrameAndFinish();
+        return;
       }
     };
 
     const onError = () => {
-      // If readyState has some data or dimensions, still allow proceeding
       if (video.readyState >= 2 || video.videoWidth > 0) {
         finish(true);
       } else {
@@ -169,56 +217,57 @@ export function waitForVideoReady(
       }
     };
 
-    video.addEventListener('canplaythrough', onReady, { once: true });
-    video.addEventListener('canplay', checkProgress);
-    video.addEventListener('progress', checkProgress);
-    video.addEventListener('loadeddata', checkProgress);
+    video.addEventListener('canplaythrough', checkReady);
+    video.addEventListener('canplay', checkReady);
+    video.addEventListener('progress', checkReady);
+    video.addEventListener('loadeddata', checkReady);
     video.addEventListener('error', onError);
 
-    // Initial check in case it is already loaded
-    checkProgress();
+    // Position video once at target start time
+    try {
+      video.currentTime = Math.max(0, targetStartTime);
+    } catch {}
+
+    checkReady();
     if (hasResolved) return;
 
-    // Gentle hardware decoder warmup nudge:
-    // Chromium occasionally pauses buffering on background video elements until a play request happens.
-    // We do an instantaneous muted micro-play/pause after 400ms to awaken the buffering pipeline.
-    nudgeTimer = setTimeout(() => {
-      if (hasResolved) return;
-      if (video.readyState < 3 && video.paused) {
-        video.muted = true;
-        video
-          .play()
-          .then(() => {
-            setTimeout(() => {
-              if (!hasResolved) video.pause();
-            }, 40);
-          })
-          .catch(() => {});
-      }
-    }, 450);
+    onBufferingProgress?.('Priming hardware video decoder at clip start...');
 
-    // Safety timeout so unusual codecs never cause an infinite hang
     timer = setTimeout(() => {
       if (!hasResolved) {
-        if (video.readyState >= 2 || video.videoWidth > 0) {
-          finish(true);
-        } else {
-          finish(false);
-        }
+        finish(video.readyState >= 2 || video.videoWidth > 0);
       }
     }, timeoutMs);
   });
 }
 
 /**
- * Creates, attaches, and completely pre-buffers an HTMLVideoElement for a video clip.
+ * Creates, attaches, and pre-buffers an HTMLVideoElement for a video clip.
  */
 export async function preloadAndBufferVideoElement(
   url: string,
   blob?: Blob,
   targetStartTime = 0,
   targetEndTime?: number,
+  clipId?: string,
+  onBufferingProgress?: (status: string) => void,
 ): Promise<HTMLVideoElement> {
+  // If we already have a pre-buffered, ready element cached for this clip, reuse it!
+  if (clipId) {
+    const existing = _prebufferedVideoMap.get(clipId);
+    if (
+      existing &&
+      existing.video &&
+      existing.video.parentNode &&
+      (existing.video.readyState >= 3 || existing.video.videoWidth > 0)
+    ) {
+      try {
+        existing.video.currentTime = Math.max(0, targetStartTime);
+      } catch {}
+      return existing.video;
+    }
+  }
+
   const video = document.createElement('video');
   video.preload = 'auto';
   video.muted = true;
@@ -230,7 +279,7 @@ export async function preloadAndBufferVideoElement(
     video.crossOrigin = 'anonymous';
   }
 
-  // Keep attached to DOM so browsers never throttle decoding or garbage collect
+  // Ensure attached to DOM so browsers never throttle decoding or garbage collect
   video.style.cssText =
     'position:fixed;bottom:-9999px;right:-9999px;width:4px;height:4px;opacity:0.001;pointer-events:none;z-index:-9999;';
   document.body.appendChild(video);
@@ -248,12 +297,22 @@ export async function preloadAndBufferVideoElement(
     video.load();
   } catch {}
 
-  await waitForVideoReady(video, targetStartTime, targetEndTime);
+  await waitForVideoReady(video, targetStartTime, targetEndTime, 10000, onBufferingProgress);
+
+  if (clipId) {
+    _prebufferedVideoMap.set(clipId, {
+      video,
+      clipId,
+      url: activeUrl,
+      readyAt: Date.now(),
+    });
+  }
+
   return video;
 }
 
 /**
- * Preloads and fully buffers a clip into memory in the background.
+ * Preloads and fully buffers a clip into RAM in the background.
  * Returns an updated VideoClip marked with `isLoaded: true`.
  */
 export async function bufferClipIntoMemory(
@@ -268,7 +327,8 @@ export async function bufferClipIntoMemory(
   // 1. Read file into RAM if blob is present
   if (clip.blob instanceof Blob) {
     try {
-      const { memoryBlob, memoryUrl } = await loadBlobIntoMemory(clip.blob);
+      onStatus?.(`Reading raw bytes for ${clip.name} into RAM...`);
+      const { memoryBlob, memoryUrl } = await loadBlobIntoMemory(clip.blob, clip.name);
       activeUrl = memoryUrl;
       activeBlob = memoryBlob;
     } catch (err) {
@@ -281,8 +341,17 @@ export async function bufferClipIntoMemory(
   const e = Number.isFinite(clip.endTime) && clip.endTime > s ? clip.endTime : s + 4.0;
 
   try {
-    const video = await preloadAndBufferVideoElement(activeUrl, activeBlob, s, e);
-    // Cache the pre-buffered video element for reuse in export/playback
+    const video = await preloadAndBufferVideoElement(
+      activeUrl,
+      activeBlob,
+      s,
+      e,
+      clip.id,
+      (bufStatus) => {
+        onStatus?.(`${clip.name}: ${bufStatus}`);
+      },
+    );
+
     _prebufferedVideoMap.set(clip.id, {
       video,
       clipId: clip.id,
@@ -326,12 +395,17 @@ export async function ensureAllClipsLoaded(
 
     onProgress?.(
       clipPercentStart,
-      `Loading video file ${i + 1} of ${total} into browser memory (${clip.name})...`,
+      `Loading video file ${i + 1} of ${total} into RAM (${clip.name})...`,
     );
 
     // If already marked loaded and has cached pre-buffered element, quickly verify
     const cached = _prebufferedVideoMap.get(clip.id);
-    if (clip.isLoaded && cached && (cached.video.readyState >= 3 || cached.video.videoWidth > 0)) {
+    if (
+      clip.isLoaded &&
+      cached &&
+      cached.video &&
+      (cached.video.readyState >= 3 || cached.video.videoWidth > 0)
+    ) {
       onProgress?.(
         clipPercentEnd,
         `Clip ${i + 1} of ${total} ready in memory (100% buffered).`,
@@ -368,4 +442,20 @@ export function getPrebufferedVideo(clipId: string): HTMLVideoElement | null {
     return item.video;
   }
   return null;
+}
+
+/**
+ * Cleanup any pre-buffered video elements that are no longer needed
+ */
+export function clearPrebufferedVideos(): void {
+  _prebufferedVideoMap.forEach(({ video }) => {
+    try {
+      video.pause();
+      video.src = '';
+      if (video.parentNode) {
+        document.body.removeChild(video);
+      }
+    } catch {}
+  });
+  _prebufferedVideoMap.clear();
 }

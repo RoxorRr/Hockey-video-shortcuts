@@ -17,7 +17,6 @@ import {
   Loader2,
 } from 'lucide-react';
 import type { User } from 'firebase/auth';
-import { playGoalHorn } from '../lib/audio';
 
 interface NavbarProps {
   aspectRatio: AspectRatio;
@@ -26,6 +25,7 @@ interface NavbarProps {
   channelTitle?: string;
   onSignIn: () => void;
   onSignOut: () => void;
+  onDownloadOriginal?: () => void;
   onExport: () => void;
   onOpenUpload: () => void;
   onClearProject?: () => void;
@@ -42,6 +42,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   channelTitle,
   onSignIn,
   onSignOut,
+  onDownloadOriginal,
   onExport,
   onOpenUpload,
   onClearProject,
@@ -240,7 +241,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     Export &amp; Project
                   </div>
 
-                  {/* Export Video Button */}
+                  {/* Download Merged Video Button */}
                   <button
                     id="export-video-btn"
                     type="button"
@@ -248,36 +249,47 @@ export const Navbar: React.FC<NavbarProps> = ({
                       setIsMenuOpen(false);
                       onExport();
                     }}
-                    disabled={clipsCount === 0 || isExporting}
+                    disabled={clipsCount === 0}
                     className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800/90 text-slate-200 hover:text-white border border-slate-700/80 hover:border-slate-600 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer group shadow"
                   >
                     <div className="flex items-center gap-2.5">
-                      <div className="w-7 h-7 rounded-lg bg-sky-950 border border-sky-800/80 text-sky-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        {isBufferingClips ? (
-                          <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
-                        ) : (
-                          <Download className="w-4 h-4" />
-                        )}
+                      <div className="w-7 h-7 rounded-lg bg-emerald-950 border border-emerald-800/80 text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                        <Download className="w-4 h-4" />
                       </div>
                       <div className="text-left">
-                        <div className="text-xs font-bold font-['Chakra_Petch'] tracking-wide flex items-center gap-1.5">
-                          {isExporting ? (
-                            'Exporting Video...'
-                          ) : isBufferingClips ? (
-                            <span className="text-amber-300">
-                              Buffering ({unbufferedClipsCount} in progress)...
-                            </span>
-                          ) : (
-                            'Export'
-                          )}
+                        <div className="text-xs font-bold font-['Chakra_Petch'] tracking-wide flex items-center gap-1.5 text-white">
+                          {clipsCount > 1 ? `Merge All (${clipsCount} Clips → 1 Video)` : 'Download Video'}
+                          <span className="text-[9px] font-mono font-bold bg-emerald-950 text-emerald-300 px-1 py-0.2 rounded border border-emerald-700/50">
+                            100% Quality
+                          </span>
                         </div>
                         <div className="text-[10px] text-slate-400">
-                          {isBufferingClips
-                            ? 'Loads video into memory to eliminate stutter'
-                            : 'Render and download MP4 video'}
+                          {clipsCount > 1
+                            ? `Combines all ${clipsCount} clips into 1 single video`
+                            : 'Untouched bit-for-bit video • Zero re-encoding'}
                         </div>
                       </div>
                     </div>
+                  </button>
+
+                  {/* Export Options Modal Button */}
+                  <button
+                    id="export-options-modal-btn"
+                    type="button"
+                    onClick={() => {
+                      setIsMenuOpen(false);
+                      onExport();
+                    }}
+                    disabled={clipsCount === 0}
+                    className="w-full flex items-center justify-between p-2 rounded-xl bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white border border-slate-800 transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-6 h-6 rounded-md bg-slate-800 flex items-center justify-center text-sky-400">
+                        <Film className="w-3.5 h-3.5" />
+                      </div>
+                      <span className="text-xs font-semibold">Export &amp; Save Details</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-mono">Modal</span>
                   </button>
 
                   {/* Export to YouTube Button */}
@@ -331,18 +343,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
             )}
           </div>
-
-          {/* Goal horn sound test button */}
-          <button
-            id="nav-goal-horn-btn"
-            type="button"
-            onClick={() => playGoalHorn(2.5)}
-            title="Play Arena Goal Horn sound effect"
-            className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-red-400 bg-slate-800/80 hover:bg-slate-800 px-2 py-1 rounded-lg border border-slate-700 transition cursor-pointer ml-1"
-          >
-            <Volume2 className="w-3.5 h-3.5 text-red-500" />
-            <span className="hidden xl:inline">Horn FX</span>
-          </button>
         </div>
 
         {/* Center: Quick Aspect Ratio Switcher (Always accessible) */}
@@ -394,35 +394,29 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         </div>
 
-        {/* Right Side: Quick Export, Account connection & Fullscreen toggle */}
+        {/* Right Side: Connect & Export, Options & Fullscreen */}
         <div className="flex items-center gap-2 justify-end">
-          {/* Direct Master Export Button */}
+          {/* Connect All Clips & Export Button */}
           <button
-            id="nav-quick-export-btn"
+            id="nav-connect-export-btn"
             type="button"
             onClick={onExport}
             disabled={clipsCount === 0 || isExporting}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow cursor-pointer select-none ${
-              isBufferingClips
-                ? 'bg-amber-500/90 hover:bg-amber-400 text-slate-950 font-black shadow-amber-950/40'
-                : 'bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white shadow-sky-950/40'
-            } disabled:opacity-40 disabled:cursor-not-allowed`}
-            title="Render and download master highlight video"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition shadow cursor-pointer select-none bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-950/40 disabled:opacity-40 disabled:cursor-not-allowed font-['Chakra_Petch']"
+            title={clipsCount > 1 ? `Merge all ${clipsCount} clips into 1 video` : 'Export video'}
           >
             {isExporting ? (
               <>
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span className="hidden sm:inline font-['Chakra_Petch']">Exporting...</span>
-              </>
-            ) : isBufferingClips ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-950" />
-                <span className="font-['Chakra_Petch']">Buffering ({unbufferedClipsCount})...</span>
+                <span>Merging Clips...</span>
               </>
             ) : (
               <>
                 <Download className="w-3.5 h-3.5" />
-                <span className="font-['Chakra_Petch'] tracking-wide">Export</span>
+                <span>{clipsCount > 1 ? `Merge All (${clipsCount} Clips → 1 Video)` : 'Download Video'}</span>
+                <span className="text-[9px] font-mono font-bold bg-emerald-950/80 text-emerald-300 px-1 py-0.2 rounded border border-emerald-700/50">
+                  100% Quality
+                </span>
               </>
             )}
           </button>

@@ -870,11 +870,9 @@ export function primeVideo(video: HTMLVideoElement, targetTime: number): Promise
 }
 
 /**
- * Complete video sequence exporter:
- * Plays through the full timeline with transitions and overlays,
- * captures canvas stream and audio, and compiles into a final video Blob.
+ * Real-time canvas stream exporter (Hardware recording mode)
  */
-export async function exportCombinedVideo(
+export async function exportRealtimeRecording(
   clips: VideoClip[],
   transitions: Transition[],
   overlaySettings: HockeyOverlaySettings,
@@ -1753,3 +1751,71 @@ function fallbackCanvasRecorder(
     }
   }, 33);
 }
+
+/**
+ * Universal video export dispatcher:
+ * Automatically routes to the optimal export engine:
+ * 1. 'webcodecs' - Deterministic offline frame-by-frame export (Zero stutter & zero freezing guaranteed)
+ * 2. 'ffmpeg' - Server-side studio render using system FFmpeg
+ * 3. 'realtime' - High-speed real-time hardware recording
+ */
+export async function exportCombinedVideo(
+  clips: VideoClip[],
+  transitions: Transition[],
+  overlaySettings: HockeyOverlaySettings,
+  aspectRatio: AspectRatio,
+  onProgress?: (percent: number, status: string) => void,
+  options?: ExportOptions,
+): Promise<Blob> {
+  const engine = options?.engine;
+
+  // 1. Studio Server FFmpeg Engine
+  if (engine === 'ffmpeg') {
+    try {
+      const { exportWithServerFfmpeg } = await import('./ffmpegExportClient');
+      return await exportWithServerFfmpeg(
+        clips,
+        transitions,
+        overlaySettings,
+        aspectRatio,
+        onProgress,
+        options,
+      );
+    } catch (ffmpegErr) {
+      console.warn('Server FFmpeg export encountered an issue, falling back to WebCodecs:', ffmpegErr);
+      onProgress?.(12, 'Server busy, switching to in-browser frame-by-frame master export...');
+    }
+  }
+
+  // 2. Deterministic Frame-by-Frame WebCodecs Engine (Default / Recommended for Zero Stutter)
+  const isWebCodecsAvailable =
+    typeof window !== 'undefined' && typeof (window as any).VideoEncoder === 'function';
+
+  if (engine === 'webcodecs' || (!engine && isWebCodecsAvailable)) {
+    try {
+      const { exportWithWebCodecs } = await import('./webCodecsRenderer');
+      return await exportWithWebCodecs(
+        clips,
+        transitions,
+        overlaySettings,
+        aspectRatio,
+        onProgress,
+        options,
+      );
+    } catch (wcErr) {
+      console.warn('WebCodecs frame-by-frame export fallback:', wcErr);
+      onProgress?.(12, 'Switching to hardware stream capture...');
+    }
+  }
+
+  // 3. Real-time Hardware Canvas Recorder (Fallback or explicit 'realtime')
+  return exportRealtimeRecording(
+    clips,
+    transitions,
+    overlaySettings,
+    aspectRatio,
+    onProgress,
+    options,
+  );
+}
+

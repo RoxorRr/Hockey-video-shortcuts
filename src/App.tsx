@@ -95,7 +95,8 @@ export default function App() {
   const [exportedBlob, setExportedBlob] = useState<Blob | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
-    qualityPreset: 'source',
+    engine: 'webcodecs',
+    qualityPreset: '1080p',
     fps: 60,
   });
 
