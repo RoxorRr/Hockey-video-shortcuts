@@ -176,5 +176,6 @@ export interface ExportOptions {
   fps?: 60 | 30;
   bitrate?: number; // in bps
   preferMp4?: boolean;
+  signal?: AbortSignal;
 }
 

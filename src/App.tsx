@@ -95,10 +95,11 @@ export default function App() {
   const [exportedBlob, setExportedBlob] = useState<Blob | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
-    engine: 'webcodecs',
+    engine: 'ffmpeg', // Studio Server FFmpeg: 100% reliable, zero stutter, finishes in seconds!
     qualityPreset: '1080p',
     fps: 60,
   });
+  const exportAbortControllerRef = React.useRef<AbortController | null>(null);
 
   // YouTube Upload Modal State
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -424,11 +425,27 @@ export default function App() {
     setSelectedClipIndex(index);
   };
 
+  const handleOpenExportModal = () => {
+    setIsExportModalOpen(true);
+  };
+
+  const handleCancelExport = () => {
+    if (exportAbortControllerRef.current) {
+      exportAbortControllerRef.current.abort();
+      exportAbortControllerRef.current = null;
+    }
+    setIsExporting(false);
+    setExportStatusText('Export cancelled. Choose an export mode below.');
+  };
+
   // Export Combined Video Sequence with Original Source Quality
   const handleExport = async (overrideOptions?: ExportOptions): Promise<Blob | null> => {
     if (clips.length === 0) return null;
 
-    const activeOptions = overrideOptions || exportOptions;
+    const activeOptions = { ...(overrideOptions || exportOptions) };
+    const controller = new AbortController();
+    exportAbortControllerRef.current = controller;
+    activeOptions.signal = controller.signal;
 
     try {
       setIsExporting(true);
@@ -473,11 +490,13 @@ export default function App() {
       setExportedBlob(blob);
       setIsExportCompleted(true);
       setIsExporting(false);
+      exportAbortControllerRef.current = null;
       return blob;
     } catch (err: any) {
       console.error('Export error:', err);
       setIsExporting(false);
-      setExportStatusText(`Export error: ${err.message}`);
+      exportAbortControllerRef.current = null;
+      setExportStatusText(`Export status: ${err.message || 'Operation stopped'}`);
       return null;
     }
   };
@@ -540,7 +559,7 @@ export default function App() {
         channelTitle={channelTitle}
         onSignIn={() => setIsAuthModalOpen(true)}
         onSignOut={handleSignOut}
-        onExport={handleExport}
+        onExport={handleOpenExportModal}
         onOpenUpload={handleOpenUpload}
         onClearProject={handleClearProject}
         isExporting={isExporting}
@@ -619,15 +638,19 @@ export default function App() {
       {isExportModalOpen && (
         <ExportModal
           isOpen={isExportModalOpen}
-          onClose={() => setIsExportModalOpen(false)}
+          onClose={() => {
+            if (!isExporting) setIsExportModalOpen(false);
+          }}
           progressPercent={exportProgress}
           statusMessage={exportStatusText}
+          isExporting={isExporting}
           isCompleted={isExportCompleted}
           exportedBlob={exportedBlob}
           onProceedToYouTube={() => setIsUploadModalOpen(true)}
           exportOptions={exportOptions}
           onUpdateOptions={(opts) => setExportOptions(opts)}
-          onReExport={(opts) => handleExport(opts)}
+          onStartExport={(opts) => handleExport(opts)}
+          onCancelExport={handleCancelExport}
           clips={clips}
           aspectRatio={aspectRatio}
         />

@@ -39,35 +39,25 @@ function seekVideoFrame(video: HTMLVideoElement, targetTime: number): Promise<vo
     }
 
     let done = false;
-    const cleanup = () => {
+    const finish = () => {
       if (done) return;
       done = true;
-      video.removeEventListener('seeked', onSeeked);
-      video.removeEventListener('error', onError);
+      video.removeEventListener('seeked', finish);
+      video.removeEventListener('error', finish);
       clearTimeout(timer);
       resolve();
     };
 
-    const onSeeked = () => {
-      if (typeof (video as any).requestVideoFrameCallback === 'function') {
-        try {
-          (video as any).requestVideoFrameCallback(() => cleanup());
-          return;
-        } catch {}
-      }
-      cleanup();
-    };
+    // Fast safety fallback (120ms max per frame)
+    const timer = setTimeout(finish, 120);
 
-    const onError = () => cleanup();
-    const timer = setTimeout(cleanup, 350); // safety fallback
-
-    video.addEventListener('seeked', onSeeked, { once: true });
-    video.addEventListener('error', onError, { once: true });
+    video.addEventListener('seeked', finish, { once: true });
+    video.addEventListener('error', finish, { once: true });
 
     try {
       video.currentTime = clampedTime;
     } catch {
-      cleanup();
+      finish();
     }
   });
 }
@@ -565,6 +555,9 @@ export async function exportWithWebCodecs(
     let currentSegIdx = 0;
 
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+      if (options?.signal?.aborted) {
+        throw new Error('Export was cancelled by user.');
+      }
       if (encodeError) throw encodeError;
 
       const timelineTime = frameIndex / fps;
@@ -649,6 +642,22 @@ export async function exportWithWebCodecs(
       const isKeyframe = frameIndex % (fps * 2) === 0;
       videoEncoder.encode(vFrame, { keyFrame: isKeyframe });
       vFrame.close();
+
+      // Backpressure: prevent encoder queue overflow and memory starvation
+      if (videoEncoder.encodeQueueSize > 4) {
+        await new Promise<void>((r) => {
+          const check = () => {
+            if (!videoEncoder || videoEncoder.encodeQueueSize <= 2) r();
+            else setTimeout(check, 6);
+          };
+          check();
+        });
+      }
+
+      // Yield periodically to keep UI responsive and prevent browser watchdog timeouts
+      if (frameIndex % 8 === 0) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
 
       // Report smooth progress
       if (frameIndex % 6 === 0 || frameIndex === totalFrames - 1) {

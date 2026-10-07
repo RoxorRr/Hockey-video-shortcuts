@@ -98,6 +98,13 @@ export async function exportWithServerFfmpeg(
       reject(new Error('Network error during server FFmpeg export'));
     };
 
+    if (options?.signal) {
+      options.signal.addEventListener('abort', () => {
+        xhr.abort();
+        reject(new Error('Export cancelled by user.'));
+      });
+    }
+
     xhr.send(formData);
   });
 }

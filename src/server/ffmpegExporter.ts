@@ -90,17 +90,28 @@ export async function handleFfmpegExport(req: Request, res: Response) {
       const rate = meta.playbackRate && meta.playbackRate > 0 ? meta.playbackRate : 1.0;
       const volume = meta.volume !== undefined ? meta.volume : 1.0;
 
+      // Check if input file has audio stream
+      let hasAudio = false;
+      try {
+        const probe = await execFileAsync('/usr/bin/ffprobe', [
+          '-v',
+          'error',
+          '-select_streams',
+          'a',
+          '-show_entries',
+          'stream=codec_type',
+          '-of',
+          'csv=p=0',
+          inputPath,
+        ]);
+        hasAudio = Boolean(probe.stdout && probe.stdout.trim().length > 0);
+      } catch {}
+
       // Build video filter
       // setpts for speed, scale & pad for exact target resolution, fps normalization
       let vFilter = `scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2:color=0x0a0f1d,fps=${fps},setsar=1`;
       if (rate !== 1.0) {
         vFilter = `setpts=${(1 / rate).toFixed(4)}*PTS,` + vFilter;
-      }
-
-      // Audio filter
-      let aFilter = `volume=${volume.toFixed(2)}`;
-      if (rate !== 1.0) {
-        aFilter = `atempo=${rate.toFixed(2)},` + aFilter;
       }
 
       const args = [
@@ -111,26 +122,66 @@ export async function handleFfmpegExport(req: Request, res: Response) {
         duration.toFixed(3),
         '-i',
         inputPath,
-        '-vf',
-        vFilter,
-        '-af',
-        aFilter,
-        '-c:v',
-        'libx264',
-        '-preset',
-        'ultrafast',
-        '-crf',
-        '21',
-        '-pix_fmt',
-        'yuv420p',
-        '-c:a',
-        'aac',
-        '-ar',
-        '44100',
-        '-ac',
-        '2',
-        outputPath,
       ];
+
+      if (hasAudio) {
+        let aFilter = `volume=${volume.toFixed(2)}`;
+        if (rate !== 1.0) {
+          aFilter = `atempo=${rate.toFixed(2)},` + aFilter;
+        }
+        args.push(
+          '-vf',
+          vFilter,
+          '-af',
+          aFilter,
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-crf',
+          '20',
+          '-pix_fmt',
+          'yuv420p',
+          '-c:a',
+          'aac',
+          '-ar',
+          '44100',
+          '-ac',
+          '2',
+          outputPath,
+        );
+      } else {
+        // Synthesize silent audio track so all concatenated segments have matched streams
+        args.push(
+          '-f',
+          'lavfi',
+          '-t',
+          duration.toFixed(3),
+          '-i',
+          'anullsrc=channel_layout=stereo:sample_rate=44100',
+          '-map',
+          '0:v:0',
+          '-map',
+          '1:a:0',
+          '-vf',
+          vFilter,
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-crf',
+          '20',
+          '-pix_fmt',
+          'yuv420p',
+          '-c:a',
+          'aac',
+          '-ar',
+          '44100',
+          '-ac',
+          '2',
+          outputPath,
+        );
+      }
 
       await execFileAsync('/usr/bin/ffmpeg', args);
       processedFiles.push(outputPath);
