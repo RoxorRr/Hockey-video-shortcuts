@@ -36,6 +36,7 @@ interface ExportModalProps {
   onUpdateOptions: (opts: ExportOptions) => void;
   onStartExport: (opts: ExportOptions) => void;
   onCancelExport?: () => void;
+  onOpenBufferModal?: () => void;
   clips?: VideoClip[];
   aspectRatio?: AspectRatio;
 }
@@ -53,6 +54,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   onUpdateOptions,
   onStartExport,
   onCancelExport,
+  onOpenBufferModal,
   clips = [],
   aspectRatio = '16:9',
 }) => {
@@ -205,6 +207,31 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   </p>
                 </div>
               </div>
+
+              {/* RAM Buffer Quick Access */}
+              {onOpenBufferModal && clips.length > 0 && (
+                <div className="flex items-center justify-between p-2.5 bg-slate-950/60 border border-slate-800 rounded-xl text-xs">
+                  <div className="flex items-center gap-2 text-slate-300">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>
+                      RAM Buffer Status:{' '}
+                      <strong className="text-emerald-300">
+                        {clips.filter((c) => c.isLoaded).length} of {clips.length} clips ready in memory
+                      </strong>
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenBufferModal();
+                    }}
+                    className="text-sky-400 hover:text-sky-300 font-bold hover:underline font-['Chakra_Petch'] text-[11px] cursor-pointer"
+                  >
+                    Preview All Videos in Buffer →
+                  </button>
+                </div>
+              )}
 
               {/* 1. EXPORT ENGINE SELECTOR CARDS */}
               <div>

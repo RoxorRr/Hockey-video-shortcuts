@@ -15,6 +15,8 @@ import {
   Check,
   Clapperboard,
   Loader2,
+  ShieldCheck,
+  HardDrive,
 } from 'lucide-react';
 import type { User } from 'firebase/auth';
 
@@ -33,6 +35,7 @@ interface NavbarProps {
   clipsCount: number;
   isBufferingClips?: boolean;
   unbufferedClipsCount?: number;
+  onOpenBufferModal?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -50,6 +53,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   clipsCount,
   isBufferingClips = false,
   unbufferedClipsCount = 0,
+  onOpenBufferModal,
 }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -396,6 +400,36 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right Side: Connect & Export, Options & Fullscreen */}
         <div className="flex items-center gap-2 justify-end">
+          {/* In-Memory Video Buffer Preview Popup Trigger */}
+          {clipsCount > 0 && (
+            <button
+              id="nav-buffer-preview-btn"
+              type="button"
+              onClick={onOpenBufferModal}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow cursor-pointer select-none border font-['Chakra_Petch'] ${
+                isBufferingClips
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 hover:bg-amber-500/30 animate-pulse'
+                  : 'bg-slate-800/90 text-sky-300 border-sky-500/30 hover:bg-slate-700/90 hover:border-sky-400'
+              }`}
+              title="Preview all videos loading in memory buffer"
+            >
+              {isBufferingClips ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                  <span>Buffering ({unbufferedClipsCount})...</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline">Buffer Preview</span>
+                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-1 py-0.2 rounded border border-emerald-800/40">
+                    {clipsCount} Ready
+                  </span>
+                </>
+              )}
+            </button>
+          )}
+
           {/* Connect All Clips & Export Button */}
           <button
             id="nav-connect-export-btn"

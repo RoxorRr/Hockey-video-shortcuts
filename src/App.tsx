@@ -10,6 +10,7 @@ import { VideoPlayer } from './components/VideoPlayer';
 import { Timeline } from './components/Timeline';
 import { OverlayControls } from './components/OverlayControls';
 import { ExportModal } from './components/ExportModal';
+import { VideoBufferModal } from './components/VideoBufferModal';
 import { YouTubeUploadModal } from './components/YouTubeUploadModal';
 import { YouTubeAuthModal } from './components/YouTubeAuthModal';
 import { generateSampleHockeyClips } from './lib/sampleClips';
@@ -101,7 +102,8 @@ export default function App() {
   });
   const exportAbortControllerRef = React.useRef<AbortController | null>(null);
 
-  // YouTube Upload Modal State
+  // Modals
+  const [isBufferModalOpen, setIsBufferModalOpen] = useState(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
@@ -293,6 +295,9 @@ export default function App() {
         return updated;
       });
 
+      // Open buffer preview popup window so all videos can be previewed while loading to buffer
+      setIsBufferModalOpen(true);
+
       // Asynchronously pre-buffer each newly added clip into browser memory
       newClips.forEach(async (c) => {
         try {
@@ -346,6 +351,8 @@ export default function App() {
       });
       return updated;
     });
+
+    setIsBufferModalOpen(true);
   };
 
   const handleUpdateClip = (index: number, updated: VideoClip) => {
@@ -566,6 +573,7 @@ export default function App() {
         clipsCount={clips.length}
         isBufferingClips={clips.some((c) => c.isBuffering || !c.isLoaded)}
         unbufferedClipsCount={clips.filter((c) => !c.isLoaded).length}
+        onOpenBufferModal={() => setIsBufferModalOpen(true)}
       />
 
       {/* Main Studio Viewport - strictly fits 100% monitor viewport without vertical scrolling */}
@@ -634,6 +642,17 @@ export default function App() {
         </div>
       </main>
 
+      {/* Video Memory Buffer Preview Popup Modal */}
+      {isBufferModalOpen && (
+        <VideoBufferModal
+          isOpen={isBufferModalOpen}
+          onClose={() => setIsBufferModalOpen(false)}
+          clips={clips}
+          onUpdateClip={handleUpdateClip}
+          onProceedToExport={handleOpenExportModal}
+        />
+      )}
+
       {/* Export / Render Progress Modal */}
       {isExportModalOpen && (
         <ExportModal
@@ -651,6 +670,7 @@ export default function App() {
           onUpdateOptions={(opts) => setExportOptions(opts)}
           onStartExport={(opts) => handleExport(opts)}
           onCancelExport={handleCancelExport}
+          onOpenBufferModal={() => setIsBufferModalOpen(true)}
           clips={clips}
           aspectRatio={aspectRatio}
         />
