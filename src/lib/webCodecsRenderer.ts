@@ -361,7 +361,7 @@ export async function exportWithWebCodecs(
   const hostDiv = document.createElement('div');
   hostDiv.id = 'webcodecs-decoder-host';
   hostDiv.style.cssText =
-    'position:fixed;bottom:0;right:0;width:160px;height:90px;overflow:hidden;opacity:1;pointer-events:none;z-index:-9999;';
+    'position:fixed;bottom:12px;right:12px;width:160px;height:90px;overflow:hidden;opacity:1;pointer-events:none;z-index:99999;border-radius:8px;border:1px solid rgba(14,165,233,0.3);background:#000;box-shadow:0 8px 24px rgba(0,0,0,0.8);';
   document.body.appendChild(hostDiv);
 
   // Dynamic 2-Player Decoder Pool: Only TWO hardware video decoder elements exist, avoiding the 16-decoder browser limit
@@ -760,6 +760,28 @@ export async function exportWithWebCodecs(
       if (!options?.removeEffectsAndTransitions) {
         drawHockeyOverlays(ctx, overlaySettings, clip, width, height, isShorts);
       }
+
+      // Mirror frame to visible live preview canvas in modal
+      const livePreviewCanvas = document.getElementById('export-live-preview-canvas') as HTMLCanvasElement | null;
+      if (livePreviewCanvas && frameIndex % 2 === 0) {
+        if (livePreviewCanvas.width !== width || livePreviewCanvas.height !== height) {
+          livePreviewCanvas.width = width;
+          livePreviewCanvas.height = height;
+        }
+        const pCtx = livePreviewCanvas.getContext('2d');
+        if (pCtx) {
+          pCtx.drawImage(canvas, 0, 0);
+        }
+      }
+
+      options?.onFrameStats?.({
+        currentTime: timelineTime,
+        totalDuration,
+        clipIndex: currentSegIdx,
+        totalClips: segments.length,
+        clipName: clip.name || `Clip ${currentSegIdx + 1}`,
+        fps,
+      });
 
       // Create pristine uncompressed VideoFrame at exact microsecond timestamp
       const frameTimestamp = Math.round(timelineTime * 1_000_000);

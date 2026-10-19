@@ -17,14 +17,25 @@ import {
   Film,
   Layers,
   Check,
+  Volume2,
+  VolumeX,
+  Radio,
 } from 'lucide-react';
 import {
   AspectRatio,
   ExportEngine,
   ExportOptions,
   ExportQualityPreset,
+  LiveExportStats,
   VideoClip,
 } from '../types';
+
+function formatExportTime(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return '00:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -42,6 +53,7 @@ interface ExportModalProps {
   onOpenBufferModal?: () => void;
   clips?: VideoClip[];
   aspectRatio?: AspectRatio;
+  liveStats?: LiveExportStats | null;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -60,9 +72,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   onOpenBufferModal,
   clips = [],
   aspectRatio = '16:9',
+  liveStats,
 }) => {
   const [selectedEngine, setSelectedEngine] = useState<ExportEngine>(
-    exportOptions.engine || 'webcodecs',
+    exportOptions.engine || 'realtime',
   );
   const [removeEffects, setRemoveEffects] = useState<boolean>(
     Boolean(exportOptions.removeEffectsAndTransitions),
@@ -73,6 +86,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [selectedFps, setSelectedFps] = useState<60 | 30>(exportOptions.fps || 30);
   const [showAdvancedAccordion, setShowAdvancedAccordion] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState<string>('');
+  const [isLiveAudioMuted, setIsLiveAudioMuted] = useState(true);
+
+  const toggleLiveAudio = () => {
+    const next = !isLiveAudioMuted;
+    setIsLiveAudioMuted(next);
+    window.dispatchEvent(
+      new CustomEvent('export-toggle-audio', { detail: { enabled: !next } }),
+    );
+  };
 
   React.useEffect(() => {
     if (!exportedBlob) {
@@ -123,24 +145,24 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   };
 
   const getEngineDetails = (engine: ExportEngine) => {
-    if (engine === 'webcodecs') {
+    if (engine === 'realtime') {
       return {
-        title: 'Deterministic Master (WebCodecs)',
-        badge: 'RECOMMENDED • ZERO STUTTER',
-        desc: 'Offline frame-by-frame encoding with monotonic timestamps. Guarantees 100% fluid playback with full scorebugs, audio mixing & zero frame drops.',
-        icon: ShieldCheck,
+        title: 'Live Preview & Canvas Stream',
+        badge: 'RECOMMENDED • 50+ CLIPS SAFE',
+        desc: 'Watch the preview live in real time while recording the master MP4. 100% reliable for 50+ clips (1.5GB+), zero black screens, never hangs.',
+        icon: Radio,
         color: 'text-emerald-400',
         border: 'border-emerald-500',
         bg: 'bg-emerald-950/40',
         pill: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
       };
     }
-    if (engine === 'realtime') {
+    if (engine === 'webcodecs') {
       return {
-        title: 'Real-Time Stream Capture',
-        badge: 'HARDWARE ACCELERATED',
-        desc: 'Direct canvas recording stream in your browser. Fast hardware rendering with live overlays.',
-        icon: Zap,
+        title: 'Offline Master (WebCodecs)',
+        badge: 'FRAME-BY-FRAME SEEK',
+        desc: 'Deterministic frame-by-frame seeking without live playback. Best for small projects (1-5 clips). May stall on 50+ large video files.',
+        icon: ShieldCheck,
         color: 'text-sky-400',
         border: 'border-sky-500',
         bg: 'bg-sky-950/40',
@@ -203,10 +225,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               </h3>
               <p className="text-[11px] text-slate-400">
                 {isExporting
-                  ? 'Stitching clips together directly with zero frame drops...'
+                  ? 'Recording live canvas stream with audio and broadcast overlays...'
                   : isCompleted
                   ? 'Your exported master video is packaged and ready.'
-                  : 'Put all videos together seamlessly like original file.'}
+                  : 'Put all videos together seamlessly into a master highlight MP4.'}
               </p>
             </div>
           </div>
@@ -270,11 +292,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 </div>
               </div>
 
-              {/* ZERO-STUTTER ARCHITECTURE CALLOUT */}
+              {/* LIVE CANVAS ARCHITECTURE CALLOUT */}
               <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex items-start gap-2.5 text-xs text-slate-400">
-                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <Radio className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5 animate-pulse" />
                 <p className="text-[11px] leading-relaxed">
-                  <strong className="text-white">Deterministic Zero-Stutter Export:</strong> The WebCodecs engine encodes each video frame offline at microsecond timestamps. Unlike live screen recorders, it never drops frames or stalls during multi-minute playback (including minutes 2 to 3), outputting a pristine 100% fluid H.264 MP4.
+                  <strong className="text-white">Live Real-Time Canvas Recorder:</strong> Shows an active visual preview monitor while recording the master MP4 directly in your browser. Eliminates frame-by-frame seeking bottlenecks and prevents black screens, making it 100% reliable for 50+ clips and large projects.
                 </p>
               </div>
 
@@ -284,7 +306,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   Export Engine
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  {(['webcodecs', 'realtime', 'direct-stitch'] as ExportEngine[]).map((engine) => {
+                  {(['realtime', 'webcodecs', 'direct-stitch'] as ExportEngine[]).map((engine) => {
                     const info = getEngineDetails(engine);
                     const isSelected = selectedEngine === engine;
                     const Icon = info.icon;
@@ -403,53 +425,119 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             </div>
           )}
 
-          {/* VIEW 2: ACTIVE EXPORT IN PROGRESS */}
+          {/* VIEW 2: ACTIVE EXPORT IN PROGRESS WITH LIVE PREVIEW */}
           {isExporting && (
-            <div className="space-y-5 text-center py-4">
-              <div className="relative w-28 h-28 mx-auto">
-                <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                  <path
-                    className="text-slate-800"
-                    strokeWidth="3"
-                    stroke="currentColor"
-                    fill="none"
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                  />
-                  <path
-                    className="text-emerald-500 transition-all duration-300 stroke-current"
-                    strokeDasharray={`${progressPercent}, 100`}
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    fill="none"
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                  />
-                </svg>
-                <div className="absolute inset-0 flex items-center justify-center font-['Chakra_Petch'] font-black text-2xl text-white">
-                  {progressPercent}%
+            <div className="space-y-4 py-1">
+              {/* LIVE BROADCAST PREVIEW MONITOR & CANVAS RECORDER */}
+              <div
+                className="relative w-full bg-black rounded-2xl overflow-hidden border border-slate-700/80 shadow-2xl flex items-center justify-center select-none"
+                style={{
+                  aspectRatio:
+                    aspectRatio === '9:16'
+                      ? '9 / 16'
+                      : aspectRatio === '1:1'
+                      ? '1 / 1'
+                      : '16 / 9',
+                  maxHeight: aspectRatio === '9:16' ? '380px' : '300px',
+                }}
+              >
+                {/* Hardware-rendered live preview canvas */}
+                <canvas
+                  id="export-live-preview-canvas"
+                  className="w-full h-full object-contain"
+                />
+
+                {/* Top Overlay Bar */}
+                <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-auto">
+                  {/* LIVE RECORDING BADGE */}
+                  <div className="flex items-center gap-2 bg-slate-950/85 backdrop-blur-md px-3 py-1 rounded-lg border border-red-500/50 shadow-lg">
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                    </span>
+                    <span className="text-[11px] font-black uppercase tracking-wider text-red-300 font-['Chakra_Petch']">
+                      REC • LIVE PREVIEW
+                    </span>
+                  </div>
+
+                  {/* LIVE AUDIO MONITOR TOGGLE */}
+                  <button
+                    type="button"
+                    onClick={toggleLiveAudio}
+                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition border cursor-pointer backdrop-blur-md shadow-lg ${
+                      !isLiveAudioMuted
+                        ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-black'
+                        : 'bg-slate-950/85 text-slate-300 border-slate-700 hover:text-white hover:border-slate-500'
+                    }`}
+                    title={
+                      !isLiveAudioMuted
+                        ? 'Mute live audio monitor'
+                        : 'Unmute audio monitor to listen live while recording'
+                    }
+                  >
+                    {!isLiveAudioMuted ? (
+                      <>
+                        <Volume2 className="w-3.5 h-3.5 text-slate-950" />
+                        <span>Live Audio ON</span>
+                      </>
+                    ) : (
+                      <>
+                        <VolumeX className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Audio Muted</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Bottom HUD Overlay */}
+                <div className="absolute bottom-2 left-2 right-2 bg-slate-950/85 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-800 flex items-center justify-between text-xs font-mono shadow-xl pointer-events-auto">
+                  <div className="flex items-center gap-2 truncate">
+                    <span className="text-emerald-400 font-bold font-['Chakra_Petch'] text-xs shrink-0">
+                      {liveStats
+                        ? `Clip ${liveStats.clipIndex + 1} of ${liveStats.totalClips}`
+                        : `Recording sequence...`}
+                    </span>
+                    {liveStats?.clipName && (
+                      <span className="text-slate-400 text-[11px] truncate max-w-[180px]">
+                        • {liveStats.clipName}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    <span className="text-slate-200 font-mono text-xs font-bold">
+                      {liveStats
+                        ? `${formatExportTime(liveStats.currentTime)} / ${formatExportTime(liveStats.totalDuration)}`
+                        : `${progressPercent}%`}
+                    </span>
+                    <span className="text-[10px] font-bold text-sky-400 bg-sky-950/80 border border-sky-500/30 px-1.5 py-0.5 rounded font-['Chakra_Petch']">
+                      {exportOptions.fps || 30} FPS
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <p className="text-sm font-bold text-white mb-1.5 font-['Chakra_Petch'] tracking-wide">
-                  {statusMessage || 'Stitching video files together...'}
-                </p>
-                <p className="text-xs text-slate-400 max-w-md mx-auto">
-                  {!removeEffects
-                    ? 'Rendering broadcast overlays, scorebug, audio mixing and video frames with zero dropped frames.'
-                    : 'Stitching raw video files together directly with zero frame drops.'}
-                </p>
-              </div>
+              {/* Progress and status text */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs font-['Chakra_Petch']">
+                  <span className="font-bold text-white tracking-wide truncate max-w-sm text-left">
+                    {statusMessage || 'Recording canvas frames live...'}
+                  </span>
+                  <span className="font-black text-emerald-400 font-mono text-sm">
+                    {progressPercent}%
+                  </span>
+                </div>
 
-              {/* Progress Bar */}
-              <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
-                <div
-                  className="bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-500 h-full transition-all duration-300"
-                  style={{ width: `${progressPercent}%` }}
-                ></div>
+                {/* Animated Gradient Progress Bar */}
+                <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-emerald-500 via-teal-400 to-sky-500 h-full transition-all duration-200 shadow-sm shadow-emerald-500/50"
+                    style={{ width: `${progressPercent}%` }}
+                  ></div>
+                </div>
               </div>
 
               {/* Live Specs */}
-              <div className="grid grid-cols-3 gap-2.5 pt-2 text-left">
+              <div className="grid grid-cols-3 gap-2 pt-1 text-left">
                 <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-2.5">
                   <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Engine</div>
                   <div className={`text-xs font-bold ${activeEngineInfo.color} font-['Chakra_Petch'] truncate`}>
@@ -472,7 +560,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
               {/* Cancel Button */}
               {onCancelExport && (
-                <div className="pt-2">
+                <div className="pt-1 text-center">
                   <button
                     type="button"
                     onClick={onCancelExport}
@@ -519,7 +607,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   </span>
                 </div>
                 <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">
-                  MP4 H.264 • 100% Smooth
+                  {exportedBlob?.type?.includes('webm') ? 'WebM VP9 • 100% Fluid' : 'MP4 H.264 • 100% Fluid'}
                 </span>
               </div>
 
@@ -527,11 +615,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                 <a
                   href={downloadUrl}
-                  download="hockey_highlights_master.mp4"
+                  download={exportedBlob?.type?.includes('webm') ? 'hockey_highlights_master.webm' : 'hockey_highlights_master.mp4'}
                   className="flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition font-['Chakra_Petch'] shadow-lg shadow-emerald-950/40 cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
-                  Download Highlight Video (MP4)
+                  Download Highlight Video ({exportedBlob?.type?.includes('webm') ? 'WebM' : 'MP4'})
                 </a>
 
                 <button

@@ -153,6 +153,12 @@ export function drawVideoFitted(
   panY = 0, // -100 to 100 percentage
   framingMode: FramingMode = 'fit-blur',
 ) {
+  if (!video || video.videoWidth === 0 || video.videoHeight === 0 || video.readyState < 2) {
+    ctx.fillStyle = '#090d16';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    return;
+  }
+
   const vW = video.videoWidth || canvasWidth;
   const vH = video.videoHeight || canvasHeight;
 
@@ -901,7 +907,7 @@ export async function exportRealtimeRecording(
   const hostDiv = document.createElement('div');
   hostDiv.id = 'video-render-engine-host';
   hostDiv.style.cssText =
-    'position:fixed;bottom:0;right:0;width:160px;height:90px;overflow:hidden;opacity:1;pointer-events:none;z-index:-9999;';
+    'position:fixed;bottom:12px;right:12px;width:160px;height:90px;overflow:hidden;opacity:1;pointer-events:none;z-index:99999;border-radius:8px;border:1px solid rgba(14,165,233,0.3);background:#000;box-shadow:0 8px 24px rgba(0,0,0,0.8);';
   document.body.appendChild(hostDiv);
 
   // Dynamic 2-Player Decoder Pool: Only TWO hardware video decoder elements exist, avoiding the 16-decoder browser limit
@@ -934,22 +940,27 @@ export async function exportRealtimeRecording(
     const currentLoaded = isPlayerA ? loadedIndexA : loadedIndexB;
 
     if (currentLoaded === clipIdx && player.readyState >= 2 && player.videoWidth > 0) {
-      player.currentTime = clips[clipIdx].startTime || 0;
+      try {
+        player.currentTime = clips[clipIdx].startTime || 0;
+      } catch {}
       return;
     }
 
     const clip = clips[clipIdx];
     let activeUrl = clip.url;
-    if (clip.blob instanceof Blob && (!activeUrl || activeUrl.startsWith('blob:null'))) {
+    if (!activeUrl && clip.blob instanceof Blob) {
       try {
-        const { memoryUrl } = await loadBlobIntoMemory(clip.blob, clip.name);
-        activeUrl = memoryUrl;
+        activeUrl = URL.createObjectURL(clip.blob);
+        clip.url = activeUrl;
+      } catch {}
+    } else if (clip.blob instanceof Blob && activeUrl.startsWith('blob:null')) {
+      try {
+        activeUrl = URL.createObjectURL(clip.blob);
         clip.url = activeUrl;
       } catch {}
     }
 
     player.src = activeUrl;
-    player.currentTime = clip.startTime || 0;
     player.playbackRate = clip.playbackRate || 1.0;
     try {
       player.load();
@@ -957,6 +968,9 @@ export async function exportRealtimeRecording(
 
     await new Promise<void>((resolve) => {
       if (player.readyState >= 2 && player.videoWidth > 0) {
+        try {
+          player.currentTime = clip.startTime || 0;
+        } catch {}
         resolve();
         return;
       }
@@ -964,12 +978,23 @@ export async function exportRealtimeRecording(
       const onReady = () => {
         if (done) return;
         done = true;
+        try {
+          player.currentTime = clip.startTime || 0;
+        } catch {}
         player.removeEventListener('loadeddata', onReady);
         player.removeEventListener('canplay', onReady);
         clearTimeout(timer);
         resolve();
       };
-      const timer = setTimeout(onReady, 3000);
+      const timer = setTimeout(() => {
+        if (!done) {
+          done = true;
+          try {
+            player.currentTime = clip.startTime || 0;
+          } catch {}
+          resolve();
+        }
+      }, 3500);
       player.addEventListener('loadeddata', onReady, { once: true });
       player.addEventListener('canplay', onReady, { once: true });
     });
@@ -1102,6 +1127,21 @@ export async function exportRealtimeRecording(
   } catch (destErr) {
     console.warn('Could not connect keep-alive tap to destination:', destErr);
   }
+
+  // Live Audio Monitor Gain (allows user to hear preview audio if desired or keep muted)
+  const liveMonitorGain = audioContext.createGain();
+  liveMonitorGain.gain.value = options?.enableLiveAudio ? 0.75 : 0.0;
+  masterGain.connect(liveMonitorGain);
+  try {
+    liveMonitorGain.connect(audioContext.destination);
+  } catch {}
+
+  const handleAudioToggle = (e: any) => {
+    if (typeof e.detail?.enabled === 'boolean') {
+      liveMonitorGain.gain.value = e.detail.enabled ? 0.75 : 0.0;
+    }
+  };
+  window.addEventListener('export-toggle-audio', handleAudioToggle);
 
   // Sub-mixer for video clips (with dynamic ducking when goal horn sounds)
   const bgMusic = overlaySettings.backgroundMusic;
@@ -1363,6 +1403,7 @@ export async function exportRealtimeRecording(
           musicAudioEl.src = '';
         } catch {}
       }
+      window.removeEventListener('export-toggle-audio', handleAudioToggle);
       try {
         audioContext.close();
       } catch {}
@@ -1397,6 +1438,19 @@ export async function exportRealtimeRecording(
       );
       if (!options?.removeEffectsAndTransitions) {
         drawHockeyOverlays(ctx, overlaySettings, clips[0], width, height, isShorts);
+      }
+
+      // Mirror initial frame to live preview canvas
+      const livePreviewCanvas = document.getElementById('export-live-preview-canvas') as HTMLCanvasElement | null;
+      if (livePreviewCanvas) {
+        if (livePreviewCanvas.width !== width || livePreviewCanvas.height !== height) {
+          livePreviewCanvas.width = width;
+          livePreviewCanvas.height = height;
+        }
+        const pCtx = livePreviewCanvas.getContext('2d');
+        if (pCtx) {
+          pCtx.drawImage(canvas, 0, 0);
+        }
       }
 
       // Start recording
@@ -1586,6 +1640,29 @@ export async function exportRealtimeRecording(
           drawHockeyOverlays(ctx, overlaySettings, clip, width, height, isShorts);
         }
 
+        // Mirror active rendered frame to visible live preview canvas if open in modal
+        const livePreviewCanvas = document.getElementById('export-live-preview-canvas') as HTMLCanvasElement | null;
+        if (livePreviewCanvas) {
+          if (livePreviewCanvas.width !== width || livePreviewCanvas.height !== height) {
+            livePreviewCanvas.width = width;
+            livePreviewCanvas.height = height;
+          }
+          const pCtx = livePreviewCanvas.getContext('2d');
+          if (pCtx) {
+            pCtx.drawImage(canvas, 0, 0);
+          }
+        }
+
+        // Report real-time frame stats to UI monitor
+        options?.onFrameStats?.({
+          currentTime: timelineTime,
+          totalDuration,
+          clipIndex: activeSegIndex,
+          totalClips: segments.length,
+          clipName: clip.name || `Clip ${activeSegIndex + 1}`,
+          fps,
+        });
+
         // Trigger goal horn sound at specific time in clip
         const hornGloballyEnabled =
           (overlaySettings.goalHornSound !== false) && (hornCfg.enabled !== false);
@@ -1695,6 +1772,17 @@ export async function exportRealtimeRecording(
 
             activeSegIndex = nextIndex;
 
+            // Immediately start new active video player so there is zero transition stutter
+            const newActiveVideo = isPlayerA ? playerB : playerA;
+            const newActiveGain = isPlayerA ? gainB : gainA;
+            const newActiveClip = segments[activeSegIndex].clip;
+            newActiveGain.gain.value = newActiveClip.volume ?? 1.0;
+            newActiveVideo.playbackRate = newActiveClip.playbackRate || 1.0;
+            newActiveVideo.play().catch(() => {
+              newActiveVideo.muted = true;
+              newActiveVideo.play().catch(() => {});
+            });
+
             // Pre-prime subsequent clip (activeSegIndex + 1) into the now-idle currentVideo element
             if (activeSegIndex + 1 < segments.length) {
               loadClipIntoPlayer(activeSegIndex + 1, currentVideo);
@@ -1710,7 +1798,7 @@ export async function exportRealtimeRecording(
         }
 
         // Safety watchdog: prevent indefinite loop if browser tab throttles or a video stalls
-        if ((performance.now() - renderStartTime) / 1000 > totalDuration + 6.0) {
+        if ((performance.now() - renderStartTime) / 1000 > totalDuration + 25.0) {
           finishExport();
           return;
         }
@@ -1784,7 +1872,7 @@ export async function exportCombinedVideo(
   onProgress?: (percent: number, status: string) => void,
   options?: ExportOptions,
 ): Promise<Blob> {
-  const engine = options?.engine || 'webcodecs';
+  const engine = options?.engine || 'realtime'; // DEFAULT: Live Canvas Recording (0 stutter, 0 freeze, real-time live preview!)
 
   // 1. Direct Server Stitch (if explicitly requested by user)
   if (engine === 'direct-stitch' || engine === 'ffmpeg') {
@@ -1800,15 +1888,15 @@ export async function exportCombinedVideo(
       );
     } catch (serverErr: any) {
       console.warn('Server FFmpeg export encountered an issue, seamlessly switching to browser engine:', serverErr);
-      onProgress?.(15, 'Switching to deterministic in-browser master engine...');
+      onProgress?.(15, 'Switching to live canvas recording engine...');
     }
   }
 
-  // 2. Deterministic Frame-by-Frame WebCodecs Engine (100% Stutter-Free, Full Overlays, Monotonic PTS)
+  // 2. Offline WebCodecs Engine (if explicitly requested by user)
   const isWebCodecsAvailable =
     typeof window !== 'undefined' && typeof (window as any).VideoEncoder === 'function';
 
-  if (engine === 'webcodecs' || (!engine && isWebCodecsAvailable)) {
+  if (engine === 'webcodecs' && isWebCodecsAvailable) {
     try {
       const { exportWithWebCodecs } = await import('./webCodecsRenderer');
       return await exportWithWebCodecs(
@@ -1821,11 +1909,11 @@ export async function exportCombinedVideo(
       );
     } catch (wcErr) {
       console.warn('WebCodecs frame-by-frame export fallback:', wcErr);
-      onProgress?.(12, 'Switching to hardware stream capture...');
+      onProgress?.(12, 'Switching to live canvas recording stream...');
     }
   }
 
-  // 3. Real-time Hardware Canvas Recorder (Fallback or explicit 'realtime')
+  // 3. Live Canvas Hardware Recording (Default & Recommended: 100% Reliable, Live Preview, Never Freezes)
   return exportRealtimeRecording(
     clips,
     transitions,

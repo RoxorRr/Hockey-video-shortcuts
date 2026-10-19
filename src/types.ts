@@ -170,6 +170,15 @@ export type ExportEngine = 'direct-stitch' | 'ffmpeg' | 'webcodecs' | 'realtime'
 
 export type ExportQualityPreset = 'source' | '4k' | '1080p' | '720p';
 
+export interface LiveExportStats {
+  currentTime: number;
+  totalDuration: number;
+  clipIndex: number;
+  totalClips: number;
+  clipName: string;
+  fps: number;
+}
+
 export interface ExportOptions {
   engine?: ExportEngine;
   qualityPreset?: ExportQualityPreset;
@@ -178,6 +187,8 @@ export interface ExportOptions {
   preferMp4?: boolean;
   signal?: AbortSignal;
   removeEffectsAndTransitions?: boolean; // When true: puts all videos together without any effects, transitions, overlays, or synthetic audio (pure original video stitch)
+  onFrameStats?: (stats: LiveExportStats) => void;
+  enableLiveAudio?: boolean;
 }
 
 

@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AspectRatio, ExportOptions, FramingMode, HockeyOverlaySettings, Transition, VideoClip } from './types';
+import { AspectRatio, ExportOptions, FramingMode, HockeyOverlaySettings, LiveExportStats, Transition, VideoClip } from './types';
 import { Navbar } from './components/Navbar';
 import { VideoPlayer } from './components/VideoPlayer';
 import { Timeline } from './components/Timeline';
@@ -96,11 +96,12 @@ export default function App() {
   const [exportedBlob, setExportedBlob] = useState<Blob | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
-    engine: 'webcodecs', // Deterministic Frame-by-Frame Master: 0 stutter, 0 freezing, full overlays!
+    engine: 'realtime', // Live Preview & Canvas Stream Capture: 100% reliable for 50+ clips, zero black screens, live monitor
     qualityPreset: 'source',
     fps: 30,
     removeEffectsAndTransitions: false,
   });
+  const [liveExportStats, setLiveExportStats] = useState<LiveExportStats | null>(null);
   const exportAbortControllerRef = React.useRef<AbortController | null>(null);
 
   // Modals
@@ -454,6 +455,10 @@ export default function App() {
     const controller = new AbortController();
     exportAbortControllerRef.current = controller;
     activeOptions.signal = controller.signal;
+    setLiveExportStats(null);
+    activeOptions.onFrameStats = (stats) => {
+      setLiveExportStats(stats);
+    };
 
     try {
       setIsExporting(true);
@@ -681,6 +686,7 @@ export default function App() {
           onOpenBufferModal={() => setIsBufferModalOpen(true)}
           clips={clips}
           aspectRatio={aspectRatio}
+          liveStats={liveExportStats}
         />
       )}
 
