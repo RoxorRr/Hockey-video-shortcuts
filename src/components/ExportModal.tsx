@@ -62,10 +62,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   aspectRatio = '16:9',
 }) => {
   const [selectedEngine, setSelectedEngine] = useState<ExportEngine>(
-    exportOptions.engine || 'direct-stitch',
+    exportOptions.engine || 'webcodecs',
   );
   const [removeEffects, setRemoveEffects] = useState<boolean>(
-    exportOptions.removeEffectsAndTransitions !== false,
+    Boolean(exportOptions.removeEffectsAndTransitions),
   );
   const [selectedPreset, setSelectedPreset] = useState<ExportQualityPreset>(
     exportOptions.qualityPreset || 'source',
@@ -123,35 +123,23 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   };
 
   const getEngineDetails = (engine: ExportEngine) => {
-    if (engine === 'direct-stitch') {
+    if (engine === 'webcodecs') {
       return {
-        title: 'Direct Original Stitch',
+        title: 'Deterministic Master (WebCodecs)',
         badge: 'RECOMMENDED • ZERO STUTTER',
-        desc: 'Stitches all video clips directly into one master file. Strips effects and transitions for 100% smooth, stutter-free original playback.',
-        icon: Film,
+        desc: 'Offline frame-by-frame encoding with monotonic timestamps. Guarantees 100% fluid playback with full scorebugs, audio mixing & zero frame drops.',
+        icon: ShieldCheck,
         color: 'text-emerald-400',
         border: 'border-emerald-500',
         bg: 'bg-emerald-950/40',
         pill: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
       };
     }
-    if (engine === 'ffmpeg') {
-      return {
-        title: 'Studio Server FFmpeg',
-        badge: 'SERVER TRANSCODE',
-        desc: 'Processes in cloud server via native FFmpeg with custom overlays and audio normalizer.',
-        icon: Server,
-        color: 'text-purple-400',
-        border: 'border-purple-500',
-        bg: 'bg-purple-950/40',
-        pill: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
-      };
-    }
     if (engine === 'realtime') {
       return {
-        title: 'Real-Time Stream',
+        title: 'Real-Time Stream Capture',
         badge: 'HARDWARE ACCELERATED',
-        desc: 'Direct canvas recording stream in your browser. Fast on computers with dedicated graphics cards.',
+        desc: 'Direct canvas recording stream in your browser. Fast hardware rendering with live overlays.',
         icon: Zap,
         color: 'text-sky-400',
         border: 'border-sky-500',
@@ -159,15 +147,27 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         pill: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
       };
     }
+    if (engine === 'direct-stitch') {
+      return {
+        title: 'Clean Video Stitch',
+        badge: 'RAW FOOTAGE ONLY',
+        desc: 'Merges original video files directly without scorebugs, goal horn, or graphic overlays.',
+        icon: Film,
+        color: 'text-amber-400',
+        border: 'border-amber-500',
+        bg: 'bg-amber-950/40',
+        pill: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      };
+    }
     return {
-      title: 'Offline Frame Stepper',
-      badge: 'BROWSER CODECS',
-      desc: 'In-browser frame decoder. Encodes MP4 locally using WebCodecs.',
-      icon: ShieldCheck,
-      color: 'text-cyan-400',
-      border: 'border-cyan-500',
-      bg: 'bg-cyan-950/40',
-      pill: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
+      title: 'Studio Server FFmpeg',
+      badge: 'SERVER TRANSCODE',
+      desc: 'Server-side native FFmpeg transcode pipeline.',
+      icon: Server,
+      color: 'text-purple-400',
+      border: 'border-purple-500',
+      bg: 'bg-purple-950/40',
+      pill: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
     };
   };
 
@@ -235,18 +235,18 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 </div>
               )}
 
-              {/* PRIMARY ZERO-STUTTER TOGGLE BANNER */}
+              {/* BROADCAST HIGHLIGHT OVERLAYS TOGGLE */}
               <div
                 onClick={() => setRemoveEffects(!removeEffects)}
                 className={`p-4 rounded-xl border transition cursor-pointer select-none flex items-start gap-3.5 ${
-                  removeEffects
+                  !removeEffects
                     ? 'bg-emerald-950/40 border-emerald-500/80 text-white shadow-lg shadow-emerald-950/30'
                     : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700'
                 }`}
               >
                 <div
                   className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 mt-0.5 border ${
-                    removeEffects
+                    !removeEffects
                       ? 'bg-emerald-500 text-slate-950 border-emerald-400'
                       : 'border-slate-700 bg-slate-900 text-transparent'
                   }`}
@@ -256,23 +256,25 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-sm font-['Chakra_Petch'] tracking-wide text-emerald-300 flex items-center gap-2">
-                      <span>Remove all effects & transitions (Put all videos together like original file)</span>
+                      <span>Include Broadcast Overlays, Scorebugs, Goal Horn & Music</span>
                       <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 rounded border border-emerald-500/40 font-bold">
-                        100% SMOOTH
+                        FULL PRODUCTION
                       </span>
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                    Strips all scorebugs, period timers, graphic overlays, and transition animations. Concatenates the original video and audio streams seamlessly with zero stuttering, zero freezing, and 100% original video clarity.
+                    {!removeEffects
+                      ? 'Renders your custom hockey scorebug, period clock, team logos, goal horn, arena music, player spotlight banners, and transition animations into the master MP4.'
+                      : 'Clean raw cut: Strips graphic overlays and audio effects, exporting only the pure video and clip audio.'}
                   </p>
                 </div>
               </div>
 
-              {/* WHY STUTTER ADVISORY CALLOUT */}
+              {/* ZERO-STUTTER ARCHITECTURE CALLOUT */}
               <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex items-start gap-2.5 text-xs text-slate-400">
-                <AlertCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <p className="text-[11px] leading-relaxed">
-                  <strong className="text-white">Why did videos stutter mid-timeline (e.g. minute 2 to 3)?</strong> Unaligned audio/video packet timestamps and variable frame rates cause video players to buffer and stall across clip boundaries. The new engine enforces <strong className="text-emerald-300">strictly monotonic frame presentation timestamps (PTS)</strong>, <strong className="text-emerald-300">resampled 48kHz stereo sync</strong>, and <strong className="text-emerald-300">millisecond-exact stream padding</strong> — or lossless bitstream copy when clips match — guaranteeing 100% fluid playback with zero freezes.
+                  <strong className="text-white">Deterministic Zero-Stutter Export:</strong> The WebCodecs engine encodes each video frame offline at microsecond timestamps. Unlike live screen recorders, it never drops frames or stalls during multi-minute playback (including minutes 2 to 3), outputting a pristine 100% fluid H.264 MP4.
                 </p>
               </div>
 
@@ -281,8 +283,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 font-['Chakra_Petch']">
                   Export Engine
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {(['direct-stitch', 'ffmpeg'] as ExportEngine[]).map((engine) => {
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {(['webcodecs', 'realtime', 'direct-stitch'] as ExportEngine[]).map((engine) => {
                     const info = getEngineDetails(engine);
                     const isSelected = selectedEngine === engine;
                     const Icon = info.icon;
@@ -293,8 +295,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                         onClick={() => {
                           setSelectedEngine(engine);
                           if (engine === 'direct-stitch') setRemoveEffects(true);
+                          else if (engine === 'webcodecs' || engine === 'realtime') setRemoveEffects(false);
                         }}
-                        className={`text-left p-3.5 rounded-xl border text-xs transition cursor-pointer flex flex-col justify-between ${
+                        className={`text-left p-3 rounded-xl border text-xs transition cursor-pointer flex flex-col justify-between ${
                           isSelected
                             ? `${info.bg} ${info.border} text-white shadow-lg shadow-black/40 ring-1 ring-${info.border}`
                             : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-850 hover:border-slate-700'
@@ -302,14 +305,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                       >
                         <div>
                           <div className="flex items-center justify-between mb-1.5">
-                            <span className="font-bold flex items-center gap-1.5 text-white text-[13px]">
-                              <Icon className={`w-4 h-4 ${info.color}`} />
-                              {info.title}
+                            <span className="font-bold flex items-center gap-1.5 text-white text-[12px] truncate">
+                              <Icon className={`w-4 h-4 shrink-0 ${info.color}`} />
+                              <span className="truncate">{info.title}</span>
                             </span>
                           </div>
-                          <p className="text-[11px] text-slate-400 leading-snug">{info.desc}</p>
+                          <p className="text-[10px] text-slate-400 leading-snug line-clamp-2">{info.desc}</p>
                         </div>
-                        <span className={`mt-3 inline-block text-[9px] uppercase font-bold ${info.color} tracking-wider`}>
+                        <span className={`mt-2.5 inline-block text-[9px] uppercase font-bold ${info.color} tracking-wider`}>
                           {info.badge}
                         </span>
                       </button>
@@ -367,7 +370,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                         : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-850'
                     }`}
                   >
-                    30 FPS (Standard Original • Maximum Stability)
+                    30 FPS (Standard Broadcast • Maximum Stability)
                   </button>
                   <button
                     type="button"
@@ -393,7 +396,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 >
                   <Play className="w-4 h-4 fill-white" />
                   <span>
-                    Put All {clips.length > 1 ? `${clips.length} Videos` : 'Video'} Together & Export (Zero Stutter)
+                    Export Highlight Video (MP4) • {clips.length > 1 ? `${clips.length} Clips` : '1 Clip'}
                   </span>
                 </button>
               </div>
@@ -431,9 +434,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   {statusMessage || 'Stitching video files together...'}
                 </p>
                 <p className="text-xs text-slate-400 max-w-md mx-auto">
-                  {removeEffects
-                    ? 'Direct original concatenation: Zero effects, zero transitions, 100% smooth playback.'
-                    : 'Applying FFmpeg transcode pipeline.'}
+                  {!removeEffects
+                    ? 'Rendering broadcast overlays, scorebug, audio mixing and video frames with zero dropped frames.'
+                    : 'Stitching raw video files together directly with zero frame drops.'}
                 </p>
               </div>
 
@@ -524,11 +527,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                 <a
                   href={downloadUrl}
-                  download="stitched_original_video.mp4"
+                  download="hockey_highlights_master.mp4"
                   className="flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition font-['Chakra_Petch'] shadow-lg shadow-emerald-950/40 cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
-                  Download Stitched Video (MP4)
+                  Download Highlight Video (MP4)
                 </a>
 
                 <button

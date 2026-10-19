@@ -96,10 +96,10 @@ export default function App() {
   const [exportedBlob, setExportedBlob] = useState<Blob | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
-    engine: 'direct-stitch', // Direct Original Video Stitch: 0 effects, 0 transitions, like original files!
+    engine: 'webcodecs', // Deterministic Frame-by-Frame Master: 0 stutter, 0 freezing, full overlays!
     qualityPreset: 'source',
     fps: 30,
-    removeEffectsAndTransitions: true,
+    removeEffectsAndTransitions: false,
   });
   const exportAbortControllerRef = React.useRef<AbortController | null>(null);
 

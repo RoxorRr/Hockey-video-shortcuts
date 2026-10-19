@@ -417,18 +417,45 @@ export async function exportWithWebCodecs(
 
     let canEncodeAudio = false;
     let audioCodec = 'mp4a.40.2'; // AAC
+    let muxerAudioCodec: 'aac' | 'opus' = 'aac';
+    let audioSampleRate = 44100;
+
     if (hasAudioData && supportsAudioEncoder) {
       try {
-        const support = await (window as any).AudioEncoder.isConfigSupported({
-          codec: audioCodec,
+        const supportAac = await (window as any).AudioEncoder.isConfigSupported({
+          codec: 'mp4a.40.2',
           sampleRate: 44100,
           numberOfChannels: 2,
           bitrate: 192_000,
         });
-        canEncodeAudio = Boolean(support && support.supported);
+        if (supportAac && supportAac.supported) {
+          canEncodeAudio = true;
+          audioCodec = 'mp4a.40.2';
+          muxerAudioCodec = 'aac';
+          audioSampleRate = 44100;
+        } else {
+          const supportOpus = await (window as any).AudioEncoder.isConfigSupported({
+            codec: 'opus',
+            sampleRate: 48000,
+            numberOfChannels: 2,
+            bitrate: 192_000,
+          });
+          if (supportOpus && supportOpus.supported) {
+            canEncodeAudio = true;
+            audioCodec = 'opus';
+            muxerAudioCodec = 'opus';
+            audioSampleRate = 48000;
+          }
+        }
       } catch {
         canEncodeAudio = false;
       }
+    }
+
+    // If audio is present in the video but browser AudioEncoder cannot encode it,
+    // throw to fall back to hardware canvas recorder so user gets master video WITH audio!
+    if (hasAudioData && !canEncodeAudio) {
+      throw new Error('AudioEncoder codec unsupported in this browser environment; falling back to hardware recorder.');
     }
 
     // Initialize mp4-muxer
@@ -441,9 +468,9 @@ export async function exportWithWebCodecs(
       },
       audio: canEncodeAudio
         ? {
-            codec: 'aac',
+            codec: muxerAudioCodec,
             numberOfChannels: 2,
-            sampleRate: 44100,
+            sampleRate: audioSampleRate,
           }
         : undefined,
       fastStart: 'in-memory',
@@ -628,8 +655,10 @@ export async function exportWithWebCodecs(
         );
       }
 
-      // Draw broadcast sports overlays
-      drawHockeyOverlays(ctx, overlaySettings, clip, width, height, isShorts);
+      // Draw broadcast sports overlays (Scorebugs, Player Cards, Period Clock)
+      if (!options?.removeEffectsAndTransitions) {
+        drawHockeyOverlays(ctx, overlaySettings, clip, width, height, isShorts);
+      }
 
       // Create pristine uncompressed VideoFrame at exact microsecond timestamp
       const frameTimestamp = Math.round(timelineTime * 1_000_000);
