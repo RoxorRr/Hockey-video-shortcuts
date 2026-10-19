@@ -897,58 +897,98 @@ export async function exportRealtimeRecording(
     } catch {}
   }
 
-  // Active host container in DOM to ensure browser GPU decoders and canvas compositor stay at full 60fps
+  // Active host container in DOM to ensure browser GPU decoders and canvas compositor stay active
   const hostDiv = document.createElement('div');
   hostDiv.id = 'video-render-engine-host';
   hostDiv.style.cssText =
-    'position:fixed;bottom:0;right:0;width:320px;height:180px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:99999;';
+    'position:fixed;bottom:0;right:0;width:160px;height:90px;overflow:hidden;opacity:1;pointer-events:none;z-index:-9999;';
   document.body.appendChild(hostDiv);
 
-  // Preload all video elements first to inspect true native video resolution
-  const videoElements: HTMLVideoElement[] = [];
-  for (let i = 0; i < clips.length; i++) {
-    onProgress?.(
-      Math.round(5 + (i / clips.length) * 12),
-      `Loading clip ${i + 1} of ${clips.length}...`,
-    );
+  // Dynamic 2-Player Decoder Pool: Only TWO hardware video decoder elements exist, avoiding the 16-decoder browser limit
+  const playerA = document.createElement('video');
+  playerA.muted = false;
+  playerA.volume = 1.0;
+  playerA.playsInline = true;
+  playerA.setAttribute('playsinline', '');
+  playerA.setAttribute('webkit-playsinline', '');
+  playerA.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;';
+  hostDiv.appendChild(playerA);
 
-    // If clip has a blob, ensure we have an active, non-revoked object URL in browser RAM
-    let activeUrl = clips[i].url;
-    if (clips[i].blob instanceof Blob) {
-      try {
-        const { memoryUrl, memoryBlob } = await loadBlobIntoMemory(clips[i].blob);
-        activeUrl = memoryUrl;
-        clips[i].url = activeUrl;
-        clips[i].blob = memoryBlob;
-      } catch (e) {
-        console.warn('Could not create object URL from blob:', e);
-      }
+  const playerB = document.createElement('video');
+  playerB.muted = false;
+  playerB.volume = 1.0;
+  playerB.playsInline = true;
+  playerB.setAttribute('playsinline', '');
+  playerB.setAttribute('webkit-playsinline', '');
+  playerB.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;';
+  hostDiv.appendChild(playerB);
+
+  // Track which clip index is currently loaded in playerA and playerB
+  let loadedIndexA = -1;
+  let loadedIndexB = -1;
+
+  // Helper to load any clip into a player on-demand without memory spikes
+  async function loadClipIntoPlayer(clipIdx: number, player: HTMLVideoElement): Promise<void> {
+    if (clipIdx < 0 || clipIdx >= clips.length) return;
+    const isPlayerA = player === playerA;
+    const currentLoaded = isPlayerA ? loadedIndexA : loadedIndexB;
+
+    if (currentLoaded === clipIdx && player.readyState >= 2 && player.videoWidth > 0) {
+      player.currentTime = clips[clipIdx].startTime || 0;
+      return;
     }
 
-    const video = await preloadVideo(activeUrl, clips[i].blob, clips[i].startTime, clips[i].endTime);
-    // Unmute video so Web Audio can route its audio track into the recording stream.
-    // Note: It connects solely to audioDest (the recorder) and NOT audioContext.destination (speakers),
-    // so user's physical speakers remain completely silent while export records loud and clear!
-    video.muted = false;
-    video.volume = 1.0;
-    video.playsInline = true;
-    video.setAttribute('playsinline', '');
-    video.setAttribute('webkit-playsinline', '');
-    video.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;';
-    hostDiv.appendChild(video);
-    videoElements.push(video);
+    const clip = clips[clipIdx];
+    let activeUrl = clip.url;
+    if (clip.blob instanceof Blob && (!activeUrl || activeUrl.startsWith('blob:null'))) {
+      try {
+        const { memoryUrl } = await loadBlobIntoMemory(clip.blob, clip.name);
+        activeUrl = memoryUrl;
+        clip.url = activeUrl;
+      } catch {}
+    }
+
+    player.src = activeUrl;
+    player.currentTime = clip.startTime || 0;
+    player.playbackRate = clip.playbackRate || 1.0;
+    try {
+      player.load();
+    } catch {}
+
+    await new Promise<void>((resolve) => {
+      if (player.readyState >= 2 && player.videoWidth > 0) {
+        resolve();
+        return;
+      }
+      let done = false;
+      const onReady = () => {
+        if (done) return;
+        done = true;
+        player.removeEventListener('loadeddata', onReady);
+        player.removeEventListener('canplay', onReady);
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(onReady, 3000);
+      player.addEventListener('loadeddata', onReady, { once: true });
+      player.addEventListener('canplay', onReady, { once: true });
+    });
+
+    if (isPlayerA) loadedIndexA = clipIdx;
+    else loadedIndexB = clipIdx;
   }
 
   // Detect highest source video resolution from uploaded clips
   let maxSourceW = 0;
   let maxSourceH = 0;
-  for (let i = 0; i < videoElements.length; i++) {
-    const v = videoElements[i];
-    const w = v.videoWidth || clips[i].originalWidth || 0;
-    const h = v.videoHeight || clips[i].originalHeight || 0;
+  for (let i = 0; i < clips.length; i++) {
+    const w = clips[i].originalWidth || 0;
+    const h = clips[i].originalHeight || 0;
     if (w > maxSourceW) maxSourceW = w;
     if (h > maxSourceH) maxSourceH = h;
   }
+  if (maxSourceW === 0) maxSourceW = 1920;
+  if (maxSourceH === 0) maxSourceH = 1080;
 
   const preset = options?.qualityPreset || 'source';
   const isShorts = aspectRatio === '9:16';
@@ -989,7 +1029,7 @@ export async function exportRealtimeRecording(
       height = 1080;
     }
   } else {
-    // 'source' preset: Preserves 100% of source footage clarity and resolution
+    // 'source' preset: Preserves source clarity and resolution
     if (aspectRatio === '9:16') {
       if (maxSourceH >= 3840 || maxSourceW >= 2160) {
         width = 2160;
@@ -1054,13 +1094,6 @@ export async function exportRealtimeRecording(
   masterGain.gain.value = 1.0;
   masterGain.connect(audioDest);
 
-  // CRUCIAL FOR CHROMIUM:
-  // In Chromium browsers, MediaStreamAudioDestinationNode does NOT pull audio
-  // from synthetic Web Audio nodes (AudioBufferSourceNode, OscillatorNode) unless
-  // audioContext.destination (the hardware audio sink) is also connected in the active graph.
-  // We attach a near-zero gain tap (0.000001 = -120dB) to audioContext.destination.
-  // This keeps Chromium's hardware audio clock running and pulling every buffer quantum
-  // without making any audible sound through the user's physical speakers.
   const keepAliveGain = audioContext.createGain();
   keepAliveGain.gain.value = 0.000001;
   masterGain.connect(keepAliveGain);
@@ -1076,10 +1109,10 @@ export async function exportRealtimeRecording(
   const origVideoFactor = bgMusic?.originalVideoVolume ?? 1.0;
 
   const clipsGain = audioContext.createGain();
-  clipsGain.gain.value = origVideoFactor; // Preserves original clip audio and video music
+  clipsGain.gain.value = origVideoFactor;
   clipsGain.connect(masterGain);
 
-  // Sub-mixer for AI Background Music (upbeat sports music without vocals)
+  // Sub-mixer for AI Background Music
   const musicGain = audioContext.createGain();
   const targetMusicVol = isMusicEnabled ? (bgMusic?.volume ?? 0.75) : 0.0;
   musicGain.gain.value = targetMusicVol;
@@ -1108,52 +1141,49 @@ export async function exportRealtimeRecording(
     }
   }
 
-  // Sub-mixer for goal horn and sound FX (boosted to ensure horn is punchy over clips)
+  // Sub-mixer for goal horn and sound FX
   const sfxGain = audioContext.createGain();
   sfxGain.gain.value = 1.6;
   sfxGain.connect(masterGain);
 
-  // Dedicated horn gain node for precise volume and envelope cutoff
   const hornGain = audioContext.createGain();
   hornGain.gain.value = 1.0;
   hornGain.connect(sfxGain);
 
-  // Continuous inaudible carrier oscillator into masterGain to ensure continuous audio frames
+  // Continuous inaudible carrier oscillator into masterGain
   const clockOsc = audioContext.createOscillator();
   const clockGain = audioContext.createGain();
-  clockGain.gain.value = 0.00005; // inaudible carrier
+  clockGain.gain.value = 0.00005;
   clockOsc.connect(clockGain);
   clockGain.connect(masterGain);
   clockOsc.start();
 
-  // Retain all active audio node handles during export so V8 Garbage Collector cannot prematurely sweep them
   const activeAudioHandles: { stop?: () => void }[] = [];
 
-  // Connect each video element to clipsGain via MediaElementAudioSourceNode
-  const clipGainNodes: (GainNode | null)[] = [];
-  const clipAudioSources: (MediaElementAudioSourceNode | null)[] = [];
+  // Dedicated Gain Nodes for the 2-player decoder pool
+  const gainA = audioContext.createGain();
+  gainA.gain.value = 0.0;
+  gainA.connect(clipsGain);
 
-  for (let i = 0; i < videoElements.length; i++) {
-    const video = videoElements[i];
-    try {
-      const source = audioContext.createMediaElementSource(video);
-      const gain = audioContext.createGain();
-      gain.gain.value = 0.0; // muted initially until its segment starts
-      source.connect(gain);
-      gain.connect(clipsGain);
+  const gainB = audioContext.createGain();
+  gainB.gain.value = 0.0;
+  gainB.connect(clipsGain);
 
-      clipAudioSources.push(source);
-      clipGainNodes.push(gain);
-    } catch (err) {
-      console.warn(`Could not attach MediaElementSource to video clip ${i}:`, err);
-      clipAudioSources.push(null);
-      clipGainNodes.push(null);
-    }
+  try {
+    const srcA = audioContext.createMediaElementSource(playerA);
+    srcA.connect(gainA);
+  } catch (errA) {
+    console.warn('Could not attach MediaElementSource to playerA:', errA);
   }
 
-  // Pre-prepare goal horn audio:
-  // In Chromium/headless container, HTMLAudioElement + MediaElementAudioSourceNode is the
-  // only audio pipeline that reliably delivers audio packets to MediaRecorder.
+  try {
+    const srcB = audioContext.createMediaElementSource(playerB);
+    srcB.connect(gainB);
+  } catch (errB) {
+    console.warn('Could not attach MediaElementSource to playerB:', errB);
+  }
+
+  // Pre-prepare goal horn audio
   let hornAudioBuffer: AudioBuffer | null = null;
   let hornAudioElement: HTMLAudioElement | null = null;
   let hornWavBlobUrl: string | null = null;
@@ -1175,10 +1205,8 @@ export async function exportRealtimeRecording(
       60.0,
       typeof hornCfg.hornDuration === 'number' && Number.isFinite(hornCfg.hornDuration)
         ? hornCfg.hornDuration
-        : (typeof hornCfg.customHornDuration === 'number' && Number.isFinite(hornCfg.customHornDuration)
-            ? hornCfg.customHornDuration
-            : 5.0)
-    )
+        : 5.0,
+    ),
   );
   const hornVol = (hornCfg.volume ?? 1.25) * 1.35;
 
@@ -1219,9 +1247,6 @@ export async function exportRealtimeRecording(
     }
   }
 
-  // If not using a custom horn OR custom horn setup failed:
-  // Render the authentic NHL stadium synth horn of configuredHornDuration length,
-  // convert it to a WAV blob URL, and create hornAudioElement connected to hornGain!
   if (!hornAudioElement) {
     try {
       hornAudioBuffer = await renderGoalHornBuffer(configuredHornDuration, hornVol, audioContext.sampleRate || 44100);
@@ -1238,7 +1263,7 @@ export async function exportRealtimeRecording(
     }
   }
 
-  // Target bitrate calibrated for pristine broadcast quality without encoder choking
+  // Target bitrate
   let targetBitrate = 14_000_000;
   if (width >= 3840 || height >= 3840) {
     targetBitrate = 28_000_000;
@@ -1251,32 +1276,21 @@ export async function exportRealtimeRecording(
     targetBitrate = options.bitrate;
   }
 
-  // Capture canvas video stream at fluid 60 FPS matching high-speed sports action
-  const fps = options?.fps || 60;
+  const fps = options?.fps || 30;
   const canvasStream = canvas.captureStream(fps);
   const combinedStream = new MediaStream([
     ...canvasStream.getVideoTracks(),
     ...audioDest.stream.getAudioTracks(),
   ]);
 
-  // Determine best supported MIME type (prefer high-quality VP9 / MP4 AVC High Profile)
-  const mimeTypes = options?.preferMp4
-    ? [
-        'video/mp4;codecs=avc1.640028,mp4a.40.2',
-        'video/mp4;codecs=avc1,mp4a.40.2',
-        'video/mp4',
-        'video/webm;codecs=vp9,opus',
-        'video/webm;codecs=vp8,opus',
-        'video/webm',
-      ]
-    : [
-        'video/webm;codecs=vp9,opus',
-        'video/mp4;codecs=avc1.640028,mp4a.40.2',
-        'video/mp4;codecs=avc1,mp4a.40.2',
-        'video/mp4',
-        'video/webm;codecs=vp8,opus',
-        'video/webm',
-      ];
+  const mimeTypes = [
+    'video/mp4;codecs=avc1.640028,mp4a.40.2',
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+  ];
   let selectedMime = 'video/webm';
   for (const m of mimeTypes) {
     if (MediaRecorder.isTypeSupported(m)) {
@@ -1309,7 +1323,6 @@ export async function exportRealtimeRecording(
       cleanUp();
       const finalBlob = new Blob(chunks, { type: selectedMime });
       if (finalBlob.size === 0) {
-        // Fallback: If chunks were somehow empty, generate valid video blob
         fallbackCanvasRecorder(canvas, totalDuration, (blob) => {
           resolve(blob);
         });
@@ -1327,12 +1340,12 @@ export async function exportRealtimeRecording(
           h.stop?.();
         } catch {}
       });
-      videoElements.forEach((v) => {
-        try {
-          v.pause();
-          v.muted = true;
-        } catch {}
-      });
+      try {
+        playerA.pause();
+        playerA.src = '';
+        playerB.pause();
+        playerB.src = '';
+      } catch {}
       if (hornWavBlobUrl) {
         try {
           URL.revokeObjectURL(hornWavBlobUrl);
@@ -1359,11 +1372,14 @@ export async function exportRealtimeRecording(
     };
 
     const startExportExecution = async () => {
-      onProgress?.(18, 'Pre-buffering all clip sequences & warming hardware decoders...');
+      onProgress?.(18, 'Pre-buffering initial sequence & warming hardware decoders...');
 
-      // Prime EVERY clip to its exact start time before recording begins so no clip stutters upon start
-      for (let i = 0; i < videoElements.length; i++) {
-        await primeVideo(videoElements[i], clips[i].startTime);
+      // Prime initial clip 0 into playerA
+      await loadClipIntoPlayer(0, playerA);
+
+      // Pre-warm clip 1 into playerB if sequence has more than 1 clip
+      if (clips.length > 1) {
+        loadClipIntoPlayer(1, playerB);
       }
 
       // Render pristine initial frame onto canvas before starting recorder
@@ -1371,7 +1387,7 @@ export async function exportRealtimeRecording(
       ctx.fillRect(0, 0, width, height);
       drawVideoFitted(
         ctx,
-        videoElements[0],
+        playerA,
         width,
         height,
         clips[0].zoom ?? 1,
@@ -1379,7 +1395,9 @@ export async function exportRealtimeRecording(
         clips[0].panY ?? 0,
         clips[0].framingMode ?? 'fit-blur',
       );
-      drawHockeyOverlays(ctx, overlaySettings, clips[0], width, height, isShorts);
+      if (!options?.removeEffectsAndTransitions) {
+        drawHockeyOverlays(ctx, overlaySettings, clips[0], width, height, isShorts);
+      }
 
       // Start recording
       recorder.start(250);
@@ -1395,13 +1413,12 @@ export async function exportRealtimeRecording(
       }
 
       // Activate initial clip audio and start video playback
-      if (clipGainNodes[0]) {
-        clipGainNodes[0]!.gain.value = clips[0].volume ?? 1.0;
-      }
-      videoElements[0].playbackRate = clips[0].playbackRate || 1.0;
-      videoElements[0].play().catch(() => {
-        videoElements[0].muted = true;
-        videoElements[0].play().catch(() => {});
+      gainA.gain.value = clips[0].volume ?? 1.0;
+      gainB.gain.value = 0.0;
+      playerA.playbackRate = clips[0].playbackRate || 1.0;
+      playerA.play().catch(() => {
+        playerA.muted = true;
+        playerA.play().catch(() => {});
       });
 
       const renderStartTime = performance.now();
@@ -1418,7 +1435,10 @@ export async function exportRealtimeRecording(
         cancelAnimationFrame(animId);
 
         onProgress?.(99, 'Packaging video chunks and finalizing master file...');
-        videoElements.forEach((v) => v.pause());
+        try {
+          playerA.pause();
+          playerB.pause();
+        } catch {}
         if (hornAudioElement) {
           try {
             hornAudioElement.pause();
@@ -1431,7 +1451,6 @@ export async function exportRealtimeRecording(
           } catch {}
         }
 
-        // Allow final audio quantums and video frames to settle into recording chunks
         setTimeout(() => {
           if (recorder.state === 'recording') {
             try {
@@ -1446,7 +1465,12 @@ export async function exportRealtimeRecording(
         if (isFinishing) return;
 
         const currentSeg = segments[activeSegIndex];
-        const currentVideo = videoElements[activeSegIndex];
+        const isPlayerA = activeSegIndex % 2 === 0;
+        const currentVideo = isPlayerA ? playerA : playerB;
+        const currentGain = isPlayerA ? gainA : gainB;
+        const nextVideo = isPlayerA ? playerB : playerA;
+        const nextGain = isPlayerA ? gainB : gainA;
+
         const clip = currentSeg.clip;
         const r = clip.playbackRate || 1.0;
 
@@ -1468,6 +1492,15 @@ export async function exportRealtimeRecording(
           currentSeg.clipStartInTimeline + Math.min(clipDurationSec, timeInClip),
         );
 
+        // Ensure next clip is ready ahead of time
+        const nextIndex = activeSegIndex + 1;
+        if (nextIndex < segments.length) {
+          const nextLoaded = isPlayerA ? loadedIndexB : loadedIndexA;
+          if (nextLoaded !== nextIndex) {
+            loadClipIntoPlayer(nextIndex, nextVideo);
+          }
+        }
+
         // Goal horn cutoff marker
         if (activeHornStopAt !== null && timelineTime >= activeHornStopAt) {
           try {
@@ -1485,7 +1518,6 @@ export async function exportRealtimeRecording(
 
         // Transition handling
         const trans = currentSeg.transitionWithNext;
-        const nextIndex = activeSegIndex + 1;
         const hasNext = nextIndex < segments.length && Boolean(trans);
 
         const isInTransition = Boolean(
@@ -1495,7 +1527,6 @@ export async function exportRealtimeRecording(
         );
 
         if (isInTransition && trans && nextIndex < segments.length) {
-          const nextVideo = videoElements[nextIndex];
           const nextClip = segments[nextIndex].clip;
           const nextRate = nextClip.playbackRate || 1.0;
 
@@ -1509,15 +1540,11 @@ export async function exportRealtimeRecording(
 
           const transProgress = Math.max(0, Math.min(1, (timelineTime - trans.startInTimeline) / trans.duration));
 
-          // Crossfade audio
+          // Crossfade audio between playerA and playerB
           const clip1Vol = clip.volume ?? 1.0;
           const clip2Vol = nextClip.volume ?? 1.0;
-          if (clipGainNodes[activeSegIndex]) {
-            clipGainNodes[activeSegIndex]!.gain.value = (1 - transProgress) * clip1Vol;
-          }
-          if (clipGainNodes[nextIndex]) {
-            clipGainNodes[nextIndex]!.gain.value = transProgress * clip2Vol;
-          }
+          currentGain.gain.value = (1 - transProgress) * clip1Vol;
+          nextGain.gain.value = transProgress * clip2Vol;
 
           // Play transition swoosh
           if (!playedTransitionSounds.has(activeSegIndex)) {
@@ -1539,9 +1566,8 @@ export async function exportRealtimeRecording(
         } else {
           // Solo playback
           const clipVol = clip.volume ?? 1.0;
-          if (clipGainNodes[activeSegIndex]) {
-            clipGainNodes[activeSegIndex]!.gain.value = clipVol;
-          }
+          currentGain.gain.value = clipVol;
+          nextGain.gain.value = 0.0;
 
           drawVideoFitted(
             ctx,
@@ -1555,17 +1581,10 @@ export async function exportRealtimeRecording(
           );
         }
 
-        // Ensure any other clips are muted
-        for (let k = 0; k < clipGainNodes.length; k++) {
-          if (k !== activeSegIndex && (!isInTransition || k !== nextIndex)) {
-            if (clipGainNodes[k] && clipGainNodes[k]!.gain.value !== 0) {
-              clipGainNodes[k]!.gain.value = 0;
-            }
-          }
+        // Draw broadcast sports overlays (Scorebugs, Player Cards, Period Clock)
+        if (!options?.removeEffectsAndTransitions) {
+          drawHockeyOverlays(ctx, overlaySettings, clip, width, height, isShorts);
         }
-
-        // Hockey overlays
-        drawHockeyOverlays(ctx, overlaySettings, clip, width, height, isShorts);
 
         // Trigger goal horn sound at specific time in clip
         const hornGloballyEnabled =
@@ -1672,15 +1691,13 @@ export async function exportRealtimeRecording(
           if (nextIndex < segments.length) {
             // Hand off to next segment cleanly
             currentVideo.pause();
-            if (clipGainNodes[activeSegIndex]) {
-              clipGainNodes[activeSegIndex]!.gain.value = 0;
-            }
+            currentGain.gain.value = 0.0;
 
             activeSegIndex = nextIndex;
 
-            // Pre-prime subsequent clip (if one exists after next)
-            if (activeSegIndex + 1 < videoElements.length) {
-              primeVideo(videoElements[activeSegIndex + 1], clips[activeSegIndex + 1].startTime);
+            // Pre-prime subsequent clip (activeSegIndex + 1) into the now-idle currentVideo element
+            if (activeSegIndex + 1 < segments.length) {
+              loadClipIntoPlayer(activeSegIndex + 1, currentVideo);
             }
 
             animId = requestAnimationFrame(renderLoop);

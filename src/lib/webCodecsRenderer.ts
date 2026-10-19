@@ -31,27 +31,36 @@ export function isWebCodecsSupported(): boolean {
  * Wait for video element to seek to exact target time and decode the frame.
  */
 function seekVideoFrame(video: HTMLVideoElement, targetTime: number): Promise<void> {
-  return new Promise((resolve) => {
-    const clampedTime = Math.max(0, targetTime);
-    if (Math.abs(video.currentTime - clampedTime) < 0.02 && video.readyState >= 2) {
-      resolve();
-      return;
-    }
+  const clampedTime = Math.max(0, targetTime);
+  if (Math.abs(video.currentTime - clampedTime) < 0.03 && video.readyState >= 2 && video.videoWidth > 0) {
+    return Promise.resolve();
+  }
 
+  return new Promise((resolve) => {
     let done = false;
     const finish = () => {
       if (done) return;
       done = true;
-      video.removeEventListener('seeked', finish);
+      video.removeEventListener('seeked', onSeeked);
       video.removeEventListener('error', finish);
       clearTimeout(timer);
       resolve();
     };
 
-    // Fast safety fallback (120ms max per frame)
-    const timer = setTimeout(finish, 120);
+    const onSeeked = () => {
+      if (typeof (video as any).requestVideoFrameCallback === 'function') {
+        try {
+          (video as any).requestVideoFrameCallback(() => finish());
+          return;
+        } catch {}
+      }
+      finish();
+    };
 
-    video.addEventListener('seeked', finish, { once: true });
+    // Safety fallback (100ms max per frame seek)
+    const timer = setTimeout(finish, 100);
+
+    video.addEventListener('seeked', onSeeked, { once: true });
     video.addEventListener('error', finish, { once: true });
 
     try {
@@ -348,45 +357,131 @@ export async function exportWithWebCodecs(
     throw new Error('Total sequence duration is zero.');
   }
 
-  // Container to host videos for frame decoding
+  // Active host container in DOM viewport with opacity 1 so Chromium GPU video decoders actively paint textures
   const hostDiv = document.createElement('div');
-  hostDiv.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:2px;height:2px;opacity:0.001;pointer-events:none;';
+  hostDiv.id = 'webcodecs-decoder-host';
+  hostDiv.style.cssText =
+    'position:fixed;bottom:0;right:0;width:160px;height:90px;overflow:hidden;opacity:1;pointer-events:none;z-index:-9999;';
   document.body.appendChild(hostDiv);
 
-  const videoElements: HTMLVideoElement[] = [];
-  try {
-    // Preload video elements
-    for (let i = 0; i < clips.length; i++) {
-      onProgress?.(
-        Math.round(5 + (i / clips.length) * 10),
-        `Preparing clip ${i + 1} of ${clips.length}...`,
-      );
+  // Dynamic 2-Player Decoder Pool: Only TWO hardware video decoder elements exist, avoiding the 16-decoder browser limit
+  const playerA = document.createElement('video');
+  playerA.muted = true;
+  playerA.playsInline = true;
+  playerA.setAttribute('playsinline', '');
+  playerA.setAttribute('webkit-playsinline', '');
+  playerA.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;';
+  hostDiv.appendChild(playerA);
 
-      let activeUrl = clips[i].url;
-      if (clips[i].blob instanceof Blob) {
-        try {
-          const { memoryUrl, memoryBlob } = await loadBlobIntoMemory(clips[i].blob);
-          activeUrl = memoryUrl;
-          clips[i].url = activeUrl;
-          clips[i].blob = memoryBlob;
-        } catch {}
-      }
+  const playerB = document.createElement('video');
+  playerB.muted = true;
+  playerB.playsInline = true;
+  playerB.setAttribute('playsinline', '');
+  playerB.setAttribute('webkit-playsinline', '');
+  playerB.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;';
+  hostDiv.appendChild(playerB);
 
-      const video = await preloadVideo(activeUrl, clips[i].blob, clips[i].startTime, clips[i].endTime);
-      video.muted = true;
-      hostDiv.appendChild(video);
-      videoElements.push(video);
+  let clipIndexA: number | null = null;
+  let clipIndexB: number | null = null;
+
+  async function getPlayerForClip(clipIdx: number): Promise<HTMLVideoElement> {
+    const isEven = clipIdx % 2 === 0;
+    const targetPlayer = isEven ? playerA : playerB;
+    const currentLoaded = isEven ? clipIndexA : clipIndexB;
+
+    if (currentLoaded === clipIdx && targetPlayer.readyState >= 2 && targetPlayer.videoWidth > 0) {
+      return targetPlayer;
     }
 
-    // Measure maximum resolution
+    const clip = clips[clipIdx];
+    if (!clip) return targetPlayer;
+
+    let activeUrl = clip.url;
+    if (clip.blob instanceof Blob && (!activeUrl || activeUrl.startsWith('blob:null'))) {
+      try {
+        const { memoryUrl } = await loadBlobIntoMemory(clip.blob, clip.name);
+        activeUrl = memoryUrl;
+        clip.url = activeUrl;
+      } catch {}
+    }
+
+    targetPlayer.src = activeUrl;
+    targetPlayer.currentTime = clip.startTime || 0;
+    try {
+      targetPlayer.load();
+    } catch {}
+
+    await new Promise<void>((resolve) => {
+      if (targetPlayer.readyState >= 2 && targetPlayer.videoWidth > 0) {
+        resolve();
+        return;
+      }
+      let resolved = false;
+      const onReady = () => {
+        if (resolved) return;
+        resolved = true;
+        targetPlayer.removeEventListener('loadeddata', onReady);
+        targetPlayer.removeEventListener('canplay', onReady);
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(onReady, 2500);
+      targetPlayer.addEventListener('loadeddata', onReady, { once: true });
+      targetPlayer.addEventListener('canplay', onReady, { once: true });
+    });
+
+    // Wake up hardware decoder pipeline so Chromium decodes and presents video textures to 2D canvas
+    try {
+      const p = targetPlayer.play();
+      if (p) {
+        await p;
+        targetPlayer.pause();
+      }
+    } catch {}
+
+    if (isEven) clipIndexA = clipIdx;
+    else clipIndexB = clipIdx;
+
+    return targetPlayer;
+  }
+
+  function preloadUpcomingClip(upcomingIdx: number) {
+    if (upcomingIdx >= clips.length) return;
+    const isEven = upcomingIdx % 2 === 0;
+    const targetPlayer = isEven ? playerA : playerB;
+    const currentLoaded = isEven ? clipIndexA : clipIndexB;
+    if (currentLoaded === upcomingIdx) return;
+
+    const clip = clips[upcomingIdx];
+    if (!clip || !clip.url) return;
+
+    targetPlayer.src = clip.url;
+    targetPlayer.currentTime = clip.startTime || 0;
+    try {
+      targetPlayer.load();
+    } catch {}
+
+    if (isEven) clipIndexA = upcomingIdx;
+    else clipIndexB = upcomingIdx;
+  }
+
+  try {
+    // Inspect source resolution
     let maxSourceW = 0;
     let maxSourceH = 0;
-    for (let i = 0; i < videoElements.length; i++) {
-      const v = videoElements[i];
-      const w = v.videoWidth || clips[i].originalWidth || 0;
-      const h = v.videoHeight || clips[i].originalHeight || 0;
+    for (let i = 0; i < clips.length; i++) {
+      const w = clips[i].originalWidth || 0;
+      const h = clips[i].originalHeight || 0;
       if (w > maxSourceW) maxSourceW = w;
       if (h > maxSourceH) maxSourceH = h;
+    }
+
+    // Prime first clip into playerA to verify dimensions
+    const firstVideo = await getPlayerForClip(0);
+    if (maxSourceW === 0) maxSourceW = firstVideo.videoWidth || 1920;
+    if (maxSourceH === 0) maxSourceH = firstVideo.videoHeight || 1080;
+    if (clips.length > 1) {
+      preloadUpcomingClip(1);
     }
 
     const fps = options?.fps || 30; // 30 or 60 fps
@@ -407,6 +502,7 @@ export async function exportWithWebCodecs(
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
+    hostDiv.appendChild(canvas);
     const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false })!;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
@@ -598,7 +694,7 @@ export async function exportWithWebCodecs(
       }
 
       const seg = segments[currentSegIdx];
-      const video = videoElements[currentSegIdx];
+      const video = await getPlayerForClip(currentSegIdx);
       const clip = seg.clip;
       const rate = clip.playbackRate || 1.0;
 
@@ -607,6 +703,11 @@ export async function exportWithWebCodecs(
       const targetClipTime = Math.min(clip.endTime, clip.startTime + timeInSeg * rate);
 
       await seekVideoFrame(video, targetClipTime);
+
+      // Preload next clip into idle decoder ahead of time
+      if (currentSegIdx + 1 < segments.length) {
+        preloadUpcomingClip(currentSegIdx + 1);
+      }
 
       // Clear frame
       ctx.fillStyle = '#090d16';
@@ -622,7 +723,7 @@ export async function exportWithWebCodecs(
 
       if (isInTransition && trans) {
         const nextIdx = currentSegIdx + 1;
-        const nextVideo = videoElements[nextIdx];
+        const nextVideo = await getPlayerForClip(nextIdx);
         const nextClip = segments[nextIdx].clip;
         const nextRate = nextClip.playbackRate || 1.0;
 
@@ -707,6 +808,12 @@ export async function exportWithWebCodecs(
     onProgress?.(100, 'Master MP4 export completed!');
     return finalBlob;
   } finally {
+    try {
+      playerA.pause();
+      playerA.src = '';
+      playerB.pause();
+      playerB.src = '';
+    } catch {}
     if (hostDiv.parentNode) {
       document.body.removeChild(hostDiv);
     }

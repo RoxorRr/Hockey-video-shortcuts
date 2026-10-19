@@ -45,41 +45,20 @@ export function getAccurateMimeType(blob: Blob, filename?: string): string {
  */
 export async function loadBlobIntoMemory(
   blob: Blob,
-  filename?: string,
+  _filename?: string,
 ): Promise<{ memoryBlob: Blob; memoryUrl: string }> {
   const cached = _memoryBlobCache.get(blob);
   if (cached) {
     return cached;
   }
 
-  const mime = getAccurateMimeType(blob, filename);
-
-  // For large files (> 80MB, including 1GB+ hockey recordings):
-  // Allocating a 1GB contiguous ArrayBuffer in V8 JavaScript memory triggers massive GC stalls,
-  // heap exhaustion, or tab crashes. The browser's native Blob URL URL.createObjectURL(blob)
-  // utilizes zero-copy C++ streaming page cache directly to hardware video decoders.
-  if (blob.size > 80 * 1024 * 1024) {
-    const memoryUrl = URL.createObjectURL(blob);
-    const result = { memoryBlob: blob, memoryUrl };
-    _memoryBlobCache.set(blob, result);
-    return result;
-  }
-
-  try {
-    const arrayBuffer = await blob.arrayBuffer();
-    const memoryBlob = new Blob([arrayBuffer], { type: mime });
-    const memoryUrl = URL.createObjectURL(memoryBlob);
-    const result = { memoryBlob, memoryUrl };
-    _memoryBlobCache.set(blob, result);
-    _memoryBlobCache.set(memoryBlob, result);
-    return result;
-  } catch (err) {
-    console.warn('Could not read blob into memory arrayBuffer, falling back to blob URL:', err);
-    const fallbackUrl = URL.createObjectURL(blob);
-    const result = { memoryBlob: blob, memoryUrl: fallbackUrl };
-    _memoryBlobCache.set(blob, result);
-    return result;
-  }
+  // Zero-copy direct Blob URL creation.
+  // Utilizing native browser Blob URLs allows OS direct memory-mapped streaming
+  // straight to hardware video decoders with 0 MB of V8 heap exhaustion!
+  const memoryUrl = URL.createObjectURL(blob);
+  const result = { memoryBlob: blob, memoryUrl };
+  _memoryBlobCache.set(blob, result);
+  return result;
 }
 
 /**
@@ -249,25 +228,9 @@ export async function preloadAndBufferVideoElement(
   blob?: Blob,
   targetStartTime = 0,
   targetEndTime?: number,
-  clipId?: string,
+  _clipId?: string,
   onBufferingProgress?: (status: string) => void,
 ): Promise<HTMLVideoElement> {
-  // If we already have a pre-buffered, ready element cached for this clip, reuse it!
-  if (clipId) {
-    const existing = _prebufferedVideoMap.get(clipId);
-    if (
-      existing &&
-      existing.video &&
-      existing.video.parentNode &&
-      (existing.video.readyState >= 3 || existing.video.videoWidth > 0)
-    ) {
-      try {
-        existing.video.currentTime = Math.max(0, targetStartTime);
-      } catch {}
-      return existing.video;
-    }
-  }
-
   const video = document.createElement('video');
   video.preload = 'auto';
   video.muted = true;
@@ -279,13 +242,13 @@ export async function preloadAndBufferVideoElement(
     video.crossOrigin = 'anonymous';
   }
 
-  // Ensure attached to DOM so browsers never throttle decoding or garbage collect
+  // Temporary attachment for metadata inspection
   video.style.cssText =
-    'position:fixed;bottom:-9999px;right:-9999px;width:4px;height:4px;opacity:0.001;pointer-events:none;z-index:-9999;';
+    'position:fixed;bottom:0;right:0;width:320px;height:180px;opacity:0.01;pointer-events:none;z-index:99999;';
   document.body.appendChild(video);
 
   let activeUrl = url;
-  if (blob instanceof Blob) {
+  if (blob instanceof Blob && (!url || url.startsWith('blob:null'))) {
     try {
       const { memoryUrl } = await loadBlobIntoMemory(blob);
       activeUrl = memoryUrl;
@@ -297,16 +260,7 @@ export async function preloadAndBufferVideoElement(
     video.load();
   } catch {}
 
-  await waitForVideoReady(video, targetStartTime, targetEndTime, 10000, onBufferingProgress);
-
-  if (clipId) {
-    _prebufferedVideoMap.set(clipId, {
-      video,
-      clipId,
-      url: activeUrl,
-      readyAt: Date.now(),
-    });
-  }
+  await waitForVideoReady(video, targetStartTime, targetEndTime, 3000, onBufferingProgress);
 
   return video;
 }
@@ -319,15 +273,14 @@ export async function bufferClipIntoMemory(
   clip: VideoClip,
   onStatus?: (status: string) => void,
 ): Promise<VideoClip> {
-  onStatus?.(`Buffering ${clip.name} into browser memory...`);
+  onStatus?.(`Verifying ${clip.name}...`);
 
   let activeUrl = clip.url;
   let activeBlob = clip.blob;
 
-  // 1. Read file into RAM if blob is present
-  if (clip.blob instanceof Blob) {
+  // 1. Ensure valid Blob URL
+  if (clip.blob instanceof Blob && (!activeUrl || activeUrl.startsWith('blob:null'))) {
     try {
-      onStatus?.(`Reading raw bytes for ${clip.name} into RAM...`);
       const { memoryBlob, memoryUrl } = await loadBlobIntoMemory(clip.blob, clip.name);
       activeUrl = memoryUrl;
       activeBlob = memoryBlob;
@@ -336,46 +289,51 @@ export async function bufferClipIntoMemory(
     }
   }
 
-  // 2. Pre-buffer video element in DOM
-  const s = Number.isFinite(clip.startTime) && clip.startTime >= 0 ? clip.startTime : 0;
-  const e = Number.isFinite(clip.endTime) && clip.endTime > s ? clip.endTime : s + 4.0;
+  // 2. Quickly probe resolution if not yet known
+  let detectedW = clip.originalWidth;
+  let detectedH = clip.originalHeight;
+  let detectedDur = clip.originalDuration;
 
-  try {
-    const video = await preloadAndBufferVideoElement(
-      activeUrl,
-      activeBlob,
-      s,
-      e,
-      clip.id,
-      (bufStatus) => {
-        onStatus?.(`${clip.name}: ${bufStatus}`);
-      },
-    );
-
-    _prebufferedVideoMap.set(clip.id, {
-      video,
-      clipId: clip.id,
-      url: activeUrl,
-      readyAt: Date.now(),
-    });
-  } catch (err) {
-    console.warn(`Could not pre-buffer video for clip ${clip.id}:`, err);
+  if (!detectedW || !detectedH || !detectedDur) {
+    try {
+      const probeVideo = document.createElement('video');
+      probeVideo.preload = 'metadata';
+      probeVideo.muted = true;
+      probeVideo.src = activeUrl;
+      await new Promise<void>((res) => {
+        const timer = setTimeout(res, 800);
+        probeVideo.onloadedmetadata = () => {
+          clearTimeout(timer);
+          if (probeVideo.videoWidth > 0) detectedW = probeVideo.videoWidth;
+          if (probeVideo.videoHeight > 0) detectedH = probeVideo.videoHeight;
+          if (probeVideo.duration > 0) detectedDur = probeVideo.duration;
+          res();
+        };
+        probeVideo.onerror = () => {
+          clearTimeout(timer);
+          res();
+        };
+        probeVideo.load();
+      });
+      probeVideo.src = '';
+    } catch {}
   }
 
   return {
     ...clip,
     url: activeUrl,
     blob: activeBlob,
+    originalWidth: detectedW || 1920,
+    originalHeight: detectedH || 1080,
+    originalDuration: detectedDur || clip.originalDuration || 5.0,
     isLoaded: true,
     isBuffering: false,
   };
 }
 
 /**
- * Ensures all clips in the timeline are completely buffered into browser memory.
- * If the user clicks "Export" immediately after uploading files, this function
- * guarantees the application waits until 100% of video bytes are loaded,
- * completely preventing dropped frames and playback stuttering.
+ * Ensures all clips in the timeline are completely ready for export.
+ * Verifies Blob URLs and dimensions without creating 50 hardware decoder instances.
  */
 export async function ensureAllClipsLoaded(
   clips: VideoClip[],
@@ -386,61 +344,36 @@ export async function ensureAllClipsLoaded(
   const updatedClips: VideoClip[] = [...clips];
   const total = clips.length;
 
-  onProgress?.(5, `Verifying browser memory buffers for ${total} ${total === 1 ? 'clip' : 'clips'}...`);
+  onProgress?.(5, `Preparing ${total} ${total === 1 ? 'clip' : 'clips'} for high-speed render...`);
 
   for (let i = 0; i < total; i++) {
     const clip = updatedClips[i];
-    const clipPercentStart = 5 + Math.round((i / total) * 90);
-    const clipPercentEnd = 5 + Math.round(((i + 1) / total) * 90);
+    const clipPercent = Math.min(95, 5 + Math.round(((i + 1) / total) * 90));
 
-    onProgress?.(
-      clipPercentStart,
-      `Loading video file ${i + 1} of ${total} into RAM (${clip.name})...`,
-    );
-
-    // If already marked loaded and has cached pre-buffered element, quickly verify
-    const cached = _prebufferedVideoMap.get(clip.id);
-    if (
-      clip.isLoaded &&
-      cached &&
-      cached.video &&
-      (cached.video.readyState >= 3 || cached.video.videoWidth > 0)
-    ) {
-      onProgress?.(
-        clipPercentEnd,
-        `Clip ${i + 1} of ${total} ready in memory (100% buffered).`,
-      );
+    if (clip.isLoaded && clip.url) {
       continue;
     }
 
-    // Buffer the clip into memory
     const buffered = await bufferClipIntoMemory(clip, (status) => {
-      onProgress?.(
-        Math.round((clipPercentStart + clipPercentEnd) / 2),
-        `Buffering clip ${i + 1} of ${total}: ${status}`,
-      );
+      onProgress?.(clipPercent, status);
     });
 
     updatedClips[i] = buffered;
 
     onProgress?.(
-      clipPercentEnd,
-      `Clip ${i + 1} of ${total} (${clip.name}) fully loaded in memory!`,
+      clipPercent,
+      `Clip ${i + 1} of ${total} ready (${clip.name || `Clip ${i + 1}`})`,
     );
   }
 
-  onProgress?.(98, 'All video files successfully loaded into memory! Ready for export.');
+  onProgress?.(100, 'All video files ready for export!');
   return updatedClips;
 }
 
 /**
  * Retrieve any pre-buffered HTMLVideoElement for a given clip ID.
  */
-export function getPrebufferedVideo(clipId: string): HTMLVideoElement | null {
-  const item = _prebufferedVideoMap.get(clipId);
-  if (item && item.video) {
-    return item.video;
-  }
+export function getPrebufferedVideo(_clipId: string): HTMLVideoElement | null {
   return null;
 }
 
