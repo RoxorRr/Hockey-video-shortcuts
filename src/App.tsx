@@ -96,9 +96,10 @@ export default function App() {
   const [exportedBlob, setExportedBlob] = useState<Blob | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
-    engine: 'ffmpeg', // Studio Server FFmpeg: 100% reliable, zero stutter, finishes in seconds!
-    qualityPreset: '1080p',
-    fps: 60,
+    engine: 'direct-stitch', // Direct Original Video Stitch: 0 effects, 0 transitions, like original files!
+    qualityPreset: 'source',
+    fps: 30,
+    removeEffectsAndTransitions: true,
   });
   const exportAbortControllerRef = React.useRef<AbortController | null>(null);
 
@@ -459,28 +460,35 @@ export default function App() {
       setIsExportCompleted(false);
       setIsExportModalOpen(true);
 
-      // Check if any clip needs to be loaded into browser memory first to prevent export stutter
-      const unbufferedCount = clips.filter((c) => !c.isLoaded).length;
+      // For server direct-stitch or ffmpeg, files are uploaded directly to native FFmpeg without needing DOM canvas buffering
+      const isServerEngine = activeOptions.engine === 'direct-stitch' || activeOptions.engine === 'ffmpeg';
       let renderClips = clips;
 
-      if (unbufferedCount > 0) {
-        setExportProgress(6);
-        setExportStatusText(
-          `Waiting for ${unbufferedCount} video ${unbufferedCount === 1 ? 'file' : 'files'} to fully load into memory (preventing playback stutter)...`,
-        );
+      if (!isServerEngine) {
+        const unbufferedCount = clips.filter((c) => !c.isLoaded).length;
+        if (unbufferedCount > 0) {
+          setExportProgress(6);
+          setExportStatusText(
+            `Waiting for ${unbufferedCount} video ${unbufferedCount === 1 ? 'file' : 'files'} to fully load into memory...`,
+          );
 
-        // Wait until all clips are 100% loaded into memory
-        renderClips = await ensureAllClipsLoaded(clips, (percent, status) => {
-          setExportProgress(Math.round(percent * 0.16));
-          setExportStatusText(status);
-        });
+          // Wait until all clips are 100% loaded into memory
+          renderClips = await ensureAllClipsLoaded(clips, (percent, status) => {
+            setExportProgress(Math.round(percent * 0.16));
+            setExportStatusText(status);
+          });
 
-        // Update clips state so UI reflects loaded status
-        setClips(renderClips);
+          // Update clips state so UI reflects loaded status
+          setClips(renderClips);
+        }
       }
 
       setExportProgress(18);
-      setExportStatusText('Preparing video assets and full-quality timeline...');
+      setExportStatusText(
+        activeOptions.removeEffectsAndTransitions
+          ? 'Stitching original video files together (Zero effects & Zero transitions)...'
+          : 'Preparing video assets and full-quality timeline...',
+      );
 
       const blob = await exportCombinedVideo(
         renderClips,

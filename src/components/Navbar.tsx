@@ -447,9 +447,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             ) : (
               <>
                 <Download className="w-3.5 h-3.5" />
-                <span>{clipsCount > 1 ? `Merge All (${clipsCount} Clips → 1 Video)` : 'Download Video'}</span>
+                <span>{clipsCount > 1 ? `Stitch All (${clipsCount} Videos → 1 File)` : 'Export Video'}</span>
                 <span className="text-[9px] font-mono font-bold bg-emerald-950/80 text-emerald-300 px-1 py-0.2 rounded border border-emerald-700/50">
-                  100% Quality
+                  Zero Stutter
                 </span>
               </>
             )}

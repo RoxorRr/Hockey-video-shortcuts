@@ -1767,10 +1767,10 @@ export async function exportCombinedVideo(
   onProgress?: (percent: number, status: string) => void,
   options?: ExportOptions,
 ): Promise<Blob> {
-  const engine = options?.engine;
+  const engine = options?.engine || 'direct-stitch';
 
-  // 1. Studio Server FFmpeg Engine
-  if (engine === 'ffmpeg') {
+  // 1. Studio Server FFmpeg Engine & Direct Original Join (100% Stutter-Free, Zero Freezing)
+  if (engine === 'direct-stitch' || engine === 'ffmpeg') {
     try {
       const { exportWithServerFfmpeg } = await import('./ffmpegExportClient');
       return await exportWithServerFfmpeg(
@@ -1782,12 +1782,12 @@ export async function exportCombinedVideo(
         options,
       );
     } catch (ffmpegErr) {
-      console.warn('Server FFmpeg export encountered an issue, falling back to WebCodecs:', ffmpegErr);
-      onProgress?.(12, 'Server busy, switching to in-browser frame-by-frame master export...');
+      console.warn('Server FFmpeg export encountered an issue, checking browser fallback:', ffmpegErr);
+      onProgress?.(12, 'Connecting to in-browser engine...');
     }
   }
 
-  // 2. Deterministic Frame-by-Frame WebCodecs Engine (Default / Recommended for Zero Stutter)
+  // 2. Deterministic Frame-by-Frame WebCodecs Engine
   const isWebCodecsAvailable =
     typeof window !== 'undefined' && typeof (window as any).VideoEncoder === 'function';
 

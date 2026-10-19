@@ -166,7 +166,7 @@ export interface YouTubeUploadResult {
   title: string;
 }
 
-export type ExportEngine = 'webcodecs' | 'ffmpeg' | 'realtime';
+export type ExportEngine = 'direct-stitch' | 'ffmpeg' | 'webcodecs' | 'realtime';
 
 export type ExportQualityPreset = 'source' | '4k' | '1080p' | '720p';
 
@@ -177,5 +177,7 @@ export interface ExportOptions {
   bitrate?: number; // in bps
   preferMp4?: boolean;
   signal?: AbortSignal;
+  removeEffectsAndTransitions?: boolean; // When true: puts all videos together without any effects, transitions, overlays, or synthetic audio (pure original video stitch)
 }
+
 

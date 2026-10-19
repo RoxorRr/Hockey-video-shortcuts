@@ -58,12 +58,14 @@ export async function exportWithServerFfmpeg(
     fps: options?.fps || 30,
     qualityPreset: options?.qualityPreset || '1080p',
     clips: clipsMetadata,
-    transitions: transitions.map((t) => ({ type: t.type, duration: t.duration })),
+    engine: options?.engine || 'direct-stitch',
+    removeEffectsAndTransitions: options?.removeEffectsAndTransitions !== false,
+    transitions: options?.removeEffectsAndTransitions === false ? transitions.map((t) => ({ type: t.type, duration: t.duration })) : [],
   };
 
   formData.append('metadata', JSON.stringify(metadata));
 
-  onProgress?.(22, 'Uploading clips to high-performance FFmpeg transcode pipeline...');
+  onProgress?.(22, 'Uploading clips to zero-stutter FFmpeg engine...');
 
   return new Promise<Blob>((resolve, reject) => {
     const xhr = new XMLHttpRequest();

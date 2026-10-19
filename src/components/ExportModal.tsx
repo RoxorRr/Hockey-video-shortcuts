@@ -14,6 +14,9 @@ import {
   AlertCircle,
   Play,
   RotateCcw,
+  Film,
+  Layers,
+  Check,
 } from 'lucide-react';
 import {
   AspectRatio,
@@ -59,13 +62,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   aspectRatio = '16:9',
 }) => {
   const [selectedEngine, setSelectedEngine] = useState<ExportEngine>(
-    exportOptions.engine || 'ffmpeg',
+    exportOptions.engine || 'direct-stitch',
+  );
+  const [removeEffects, setRemoveEffects] = useState<boolean>(
+    exportOptions.removeEffectsAndTransitions !== false,
   );
   const [selectedPreset, setSelectedPreset] = useState<ExportQualityPreset>(
-    exportOptions.qualityPreset || '1080p',
+    exportOptions.qualityPreset || 'source',
   );
-  const [selectedFps, setSelectedFps] = useState<60 | 30>(exportOptions.fps || 60);
-  const [showSettingsAccordion, setShowSettingsAccordion] = useState(false);
+  const [selectedFps, setSelectedFps] = useState<60 | 30>(exportOptions.fps || 30);
+  const [showAdvancedAccordion, setShowAdvancedAccordion] = useState(false);
 
   if (!isOpen) return null;
 
@@ -73,6 +79,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   // Calculate projected resolution
   const getProjectedRes = (preset: ExportQualityPreset) => {
+    if (preset === 'source') return 'Source (Original Resolution & Aspect Ratio)';
     if (preset === '4k') {
       if (aspectRatio === '9:16') return '2160 × 3840 (4K Vertical)';
       if (aspectRatio === '1:1') return '2160 × 2160 (4K Square)';
@@ -98,17 +105,30 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       engine: activeEngine,
       qualityPreset: selectedPreset,
       fps: selectedFps,
+      removeEffectsAndTransitions: removeEffects,
     };
     onUpdateOptions(updated);
     onStartExport(updated);
   };
 
   const getEngineDetails = (engine: ExportEngine) => {
+    if (engine === 'direct-stitch') {
+      return {
+        title: 'Direct Original Stitch',
+        badge: 'RECOMMENDED • ZERO STUTTER',
+        desc: 'Stitches all video clips directly into one master file. Strips effects and transitions for 100% smooth, stutter-free original playback.',
+        icon: Film,
+        color: 'text-emerald-400',
+        border: 'border-emerald-500',
+        bg: 'bg-emerald-950/40',
+        pill: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+      };
+    }
     if (engine === 'ffmpeg') {
       return {
         title: 'Studio Server FFmpeg',
-        badge: 'RECOMMENDED • FASTEST',
-        desc: 'Processes in cloud server via native FFmpeg. 100% stutter-free, zero browser lag, finishes in seconds.',
+        badge: 'SERVER TRANSCODE',
+        desc: 'Processes in cloud server via native FFmpeg with custom overlays and audio normalizer.',
         icon: Server,
         color: 'text-purple-400',
         border: 'border-purple-500',
@@ -129,40 +149,40 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       };
     }
     return {
-      title: 'Offline Frame-by-Frame',
-      badge: 'OFFLINE STEPPING',
-      desc: 'Steps through each frame mathematically with backpressure. Completely decoupled from playback speed.',
+      title: 'Offline Frame Stepper',
+      badge: 'BROWSER CODECS',
+      desc: 'In-browser frame decoder. Encodes MP4 locally using WebCodecs.',
       icon: ShieldCheck,
-      color: 'text-emerald-400',
-      border: 'border-emerald-500',
-      bg: 'bg-emerald-950/40',
-      pill: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+      color: 'text-cyan-400',
+      border: 'border-cyan-500',
+      bg: 'bg-cyan-950/40',
+      pill: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
     };
   };
 
   const activeEngineInfo = getEngineDetails(exportOptions.engine || selectedEngine);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[92vh]">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/70 shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/80 shrink-0">
           <div className="flex items-center gap-3">
             {isExporting ? (
-              <Loader2 className="w-5 h-5 text-sky-400 animate-spin shrink-0" />
+              <Loader2 className="w-5 h-5 text-emerald-400 animate-spin shrink-0" />
             ) : isCompleted ? (
               <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
             ) : (
-              <Sliders className="w-5 h-5 text-sky-400 shrink-0" />
+              <Film className="w-5 h-5 text-emerald-400 shrink-0" />
             )}
             <div>
               <h3 className="font-bold text-base text-white font-['Chakra_Petch'] tracking-wide flex items-center gap-2">
                 <span>
                   {isExporting
-                    ? 'EXPORTING HIGHLIGHT SEQUENCE'
+                    ? 'EXPORTING VIDEO SEQUENCE'
                     : isCompleted
-                    ? 'HIGHLIGHT VIDEO MASTER READY'
-                    : 'SELECT VIDEO EXPORT MODE'}
+                    ? 'MASTER VIDEO READY'
+                    : 'EXPORT VIDEOS TOGETHER'}
                 </span>
                 <span
                   className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${activeEngineInfo.pill} font-bold`}
@@ -172,10 +192,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               </h3>
               <p className="text-[11px] text-slate-400">
                 {isExporting
-                  ? 'Compiling video cuts, audio transitions, and graphics overlays...'
+                  ? 'Stitching clips together directly with zero frame drops...'
                   : isCompleted
                   ? 'Your exported master video is packaged and ready.'
-                  : 'Choose the export engine that best matches your device.'}
+                  : 'Put all videos together seamlessly like original file.'}
               </p>
             </div>
           </div>
@@ -192,54 +212,55 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         <div className="p-6 space-y-5 overflow-y-auto">
           {/* VIEW 1: SETUP & ENGINE SELECTION (Shown before exporting or when configuring) */}
           {!isExporting && !isCompleted && (
-            <div className="space-y-5">
-              {/* STUTTER ADVISORY CALLOUT */}
-              <div className="bg-slate-950 border border-purple-500/40 rounded-xl p-3.5 flex items-start gap-3 text-xs text-slate-300">
-                <AlertCircle className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <span className="font-bold text-purple-300 block font-['Chakra_Petch'] uppercase tracking-wider text-[12px]">
-                    Experiencing stuttering or freezing in exported videos?
-                  </span>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Browser video decoders can freeze when handling high-bitrate clips. Select{' '}
-                    <strong className="text-white">Studio Server FFmpeg</strong> below to process on the server with{' '}
-                    <strong className="text-emerald-300">100% smooth playback</strong> and zero client CPU load!
+            <div className="space-y-4">
+              {/* PRIMARY ZERO-STUTTER TOGGLE BANNER */}
+              <div
+                onClick={() => setRemoveEffects(!removeEffects)}
+                className={`p-4 rounded-xl border transition cursor-pointer select-none flex items-start gap-3.5 ${
+                  removeEffects
+                    ? 'bg-emerald-950/40 border-emerald-500/80 text-white shadow-lg shadow-emerald-950/30'
+                    : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                <div
+                  className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 mt-0.5 border ${
+                    removeEffects
+                      ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                      : 'border-slate-700 bg-slate-900 text-transparent'
+                  }`}
+                >
+                  <Check className="w-4 h-4 stroke-[3]" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm font-['Chakra_Petch'] tracking-wide text-emerald-300 flex items-center gap-2">
+                      <span>Remove all effects & transitions (Put all videos together like original file)</span>
+                      <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 rounded border border-emerald-500/40 font-bold">
+                        100% SMOOTH
+                      </span>
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                    Strips all scorebugs, period timers, graphic overlays, and transition animations. Concatenates the original video and audio streams seamlessly with zero stuttering, zero freezing, and 100% original video clarity.
                   </p>
                 </div>
               </div>
 
-              {/* RAM Buffer Quick Access */}
-              {onOpenBufferModal && clips.length > 0 && (
-                <div className="flex items-center justify-between p-2.5 bg-slate-950/60 border border-slate-800 rounded-xl text-xs">
-                  <div className="flex items-center gap-2 text-slate-300">
-                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>
-                      RAM Buffer Status:{' '}
-                      <strong className="text-emerald-300">
-                        {clips.filter((c) => c.isLoaded).length} of {clips.length} clips ready in memory
-                      </strong>
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onClose();
-                      onOpenBufferModal();
-                    }}
-                    className="text-sky-400 hover:text-sky-300 font-bold hover:underline font-['Chakra_Petch'] text-[11px] cursor-pointer"
-                  >
-                    Preview All Videos in Buffer →
-                  </button>
-                </div>
-              )}
+              {/* WHY STUTTER ADVISORY CALLOUT */}
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex items-start gap-2.5 text-xs text-slate-400">
+                <AlertCircle className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+                <p className="text-[11px] leading-relaxed">
+                  <strong className="text-white">Why did previous exports freeze?</strong> Browser canvas screen-recording drops frames during complex rendering. The new <strong className="text-emerald-400">Direct Original Stitch</strong> uses native server-grade FFmpeg to concatenate frames mathematically, guaranteeing zero dropped frames.
+                </p>
+              </div>
 
               {/* 1. EXPORT ENGINE SELECTOR CARDS */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 font-['Chakra_Petch']">
-                  Choose Export Engine
+                  Export Engine
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  {(['ffmpeg', 'realtime', 'webcodecs'] as ExportEngine[]).map((engine) => {
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {(['direct-stitch', 'ffmpeg'] as ExportEngine[]).map((engine) => {
                     const info = getEngineDetails(engine);
                     const isSelected = selectedEngine === engine;
                     const Icon = info.icon;
@@ -247,7 +268,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                       <button
                         key={engine}
                         type="button"
-                        onClick={() => setSelectedEngine(engine)}
+                        onClick={() => {
+                          setSelectedEngine(engine);
+                          if (engine === 'direct-stitch') setRemoveEffects(true);
+                        }}
                         className={`text-left p-3.5 rounded-xl border text-xs transition cursor-pointer flex flex-col justify-between ${
                           isSelected
                             ? `${info.bg} ${info.border} text-white shadow-lg shadow-black/40 ring-1 ring-${info.border}`
@@ -274,15 +298,20 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
               {/* 2. RESOLUTION PRESETS */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 font-['Chakra_Petch']">
-                  Export Resolution Preset
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold text-slate-300 uppercase tracking-wider font-['Chakra_Petch']">
+                    Video Resolution
+                  </label>
+                  <span className="text-[11px] text-emerald-400 font-mono">
+                    {getProjectedRes(selectedPreset)}
+                  </span>
+                </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
-                    { id: '1080p', label: '1080p Full HD', sub: 'Recommended' },
-                    { id: '720p', label: '720p HD', sub: 'Fastest render' },
-                    { id: 'source', label: 'Source Quality', sub: 'Matches clips' },
-                    { id: '4k', label: '4K Ultra HD', sub: 'High resolution' },
+                    { id: 'source', label: 'Source Quality', sub: 'Matches original files' },
+                    { id: '1080p', label: '1080p Full HD', sub: 'Crisp broadcast' },
+                    { id: '720p', label: '720p HD', sub: 'Fastest merge' },
+                    { id: '4k', label: '4K Ultra HD', sub: 'Maximum detail' },
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -290,7 +319,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                       onClick={() => setSelectedPreset(item.id as ExportQualityPreset)}
                       className={`text-left p-2.5 rounded-xl border text-xs transition cursor-pointer ${
                         selectedPreset === item.id
-                          ? 'bg-sky-500/20 border-sky-500 text-white shadow-sm'
+                          ? 'bg-emerald-500/20 border-emerald-500 text-white shadow-sm'
                           : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-850'
                       }`}
                     >
@@ -304,30 +333,30 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               {/* 3. FRAMERATE SELECTION */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 font-['Chakra_Petch']">
-                  Frame Rate
+                  Output Frame Rate
                 </label>
                 <div className="flex gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedFps(60)}
-                    className={`flex-1 p-2.5 rounded-xl border text-xs font-bold transition cursor-pointer ${
-                      selectedFps === 60
-                        ? 'bg-sky-500/20 border-sky-500 text-white'
-                        : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-850'
-                    }`}
-                  >
-                    60 FPS (Ultra Smooth Motion)
-                  </button>
                   <button
                     type="button"
                     onClick={() => setSelectedFps(30)}
                     className={`flex-1 p-2.5 rounded-xl border text-xs font-bold transition cursor-pointer ${
                       selectedFps === 30
-                        ? 'bg-sky-500/20 border-sky-500 text-white'
+                        ? 'bg-emerald-500/20 border-emerald-500 text-white'
                         : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-850'
                     }`}
                   >
-                    30 FPS (Maximum Stability & Compact)
+                    30 FPS (Standard Original • Maximum Stability)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedFps(60)}
+                    className={`flex-1 p-2.5 rounded-xl border text-xs font-bold transition cursor-pointer ${
+                      selectedFps === 60
+                        ? 'bg-emerald-500/20 border-emerald-500 text-white'
+                        : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-850'
+                    }`}
+                  >
+                    60 FPS (Ultra Smooth Motion)
                   </button>
                 </div>
               </div>
@@ -338,10 +367,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   id="start-export-modal-btn"
                   type="button"
                   onClick={() => handleStart()}
-                  className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-sky-600 via-indigo-600 to-purple-600 hover:from-sky-500 hover:to-purple-500 text-white py-3 rounded-xl text-sm font-bold uppercase tracking-wider transition font-['Chakra_Petch'] shadow-lg shadow-indigo-950/50 cursor-pointer"
+                  className="w-full flex items-center justify-center gap-2.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-sky-600 hover:from-emerald-500 hover:to-sky-500 text-white py-3.5 rounded-xl text-sm font-bold uppercase tracking-wider transition font-['Chakra_Petch'] shadow-lg shadow-emerald-950/50 cursor-pointer"
                 >
                   <Play className="w-4 h-4 fill-white" />
-                  Start Export with {getEngineDetails(selectedEngine).title}
+                  <span>
+                    Put All {clips.length > 1 ? `${clips.length} Videos` : 'Video'} Together & Export (Zero Stutter)
+                  </span>
                 </button>
               </div>
             </div>
@@ -360,7 +391,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                   />
                   <path
-                    className="text-sky-500 transition-all duration-300 stroke-current"
+                    className="text-emerald-500 transition-all duration-300 stroke-current"
                     strokeDasharray={`${progressPercent}, 100`}
                     strokeWidth="3"
                     strokeLinecap="round"
@@ -375,21 +406,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
               <div>
                 <p className="text-sm font-bold text-white mb-1.5 font-['Chakra_Petch'] tracking-wide">
-                  {statusMessage || 'Rendering video highlights...'}
+                  {statusMessage || 'Stitching video files together...'}
                 </p>
                 <p className="text-xs text-slate-400 max-w-md mx-auto">
-                  {exportOptions.engine === 'ffmpeg'
-                    ? 'Processing on Studio Server FFmpeg transcode pipeline (Zero stutter).'
-                    : exportOptions.engine === 'webcodecs'
-                    ? 'Stepping through each frame offline at exact timestamps with backpressure.'
-                    : 'Recording video stream via hardware acceleration.'}
+                  {removeEffects
+                    ? 'Direct original concatenation: Zero effects, zero transitions, 100% smooth playback.'
+                    : 'Applying FFmpeg transcode pipeline.'}
                 </p>
               </div>
 
               {/* Progress Bar */}
               <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
                 <div
-                  className="bg-gradient-to-r from-sky-500 via-indigo-500 to-purple-500 h-full transition-all duration-300"
+                  className="bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-500 h-full transition-all duration-300"
                   style={{ width: `${progressPercent}%` }}
                 ></div>
               </div>
@@ -405,13 +434,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-2.5">
                   <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Framerate</div>
                   <div className="text-xs font-bold text-emerald-400 font-['Chakra_Petch']">
-                    {exportOptions.fps || 60} FPS
+                    {exportOptions.fps || 30} FPS
                   </div>
                 </div>
                 <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-2.5">
                   <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Resolution</div>
                   <div className="text-xs font-bold text-sky-400 font-['Chakra_Petch'] truncate">
-                    {getProjectedRes(exportOptions.qualityPreset || '1080p')}
+                    {getProjectedRes(exportOptions.qualityPreset || 'source')}
                   </div>
                 </div>
               </div>
@@ -424,7 +453,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     onClick={onCancelExport}
                     className="text-xs text-slate-400 hover:text-red-400 border border-slate-800 hover:border-red-900/60 bg-slate-950/60 px-4 py-2 rounded-xl transition cursor-pointer"
                   >
-                    Cancel Export & Choose Different Mode
+                    Cancel Export
                   </button>
                 </div>
               )}
@@ -434,7 +463,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           {/* VIEW 3: COMPLETED OUTPUT PREVIEW & DOWNLOAD */}
           {isCompleted && (
             <div className="space-y-4">
-              {/* Preview Player */}
+              {/* Preview Player to verify smooth playback */}
               {downloadUrl && (
                 <div
                   className="rounded-xl overflow-hidden bg-black max-h-56 mx-auto border border-slate-800 shadow-inner flex items-center justify-center"
@@ -456,125 +485,52 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 </div>
               )}
 
-              {/* Quality & Specifications Confirmation Banner */}
-              <div className="bg-emerald-950/40 border border-emerald-700/60 rounded-xl p-3.5 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span className="text-xs font-bold text-emerald-200 uppercase tracking-wider font-['Chakra_Petch']">
-                      Export Ready ({activeEngineInfo.title})
-                    </span>
-                  </div>
-                  <span className="text-[10px] bg-emerald-900/60 text-emerald-300 font-mono font-bold px-2 py-0.5 rounded border border-emerald-700/50">
-                    Master MP4
+              <div className="bg-emerald-950/40 border border-emerald-500/50 rounded-xl p-3 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 text-emerald-300">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>
+                    Master video packaged successfully! Size:{' '}
+                    <strong>{exportedBlob ? (exportedBlob.size / (1024 * 1024)).toFixed(1) : 0} MB</strong>
                   </span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-800/40">
-                    <span className="text-[10px] text-emerald-400 block font-semibold">RESOLUTION</span>
-                    <span className="font-bold text-white font-['Chakra_Petch']">
-                      {getProjectedRes(exportOptions.qualityPreset || '1080p')}
-                    </span>
-                  </div>
-                  <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-800/40">
-                    <span className="text-[10px] text-emerald-400 block font-semibold">FRAMERATE</span>
-                    <span className="font-bold text-white font-['Chakra_Petch']">{exportOptions.fps || 60} FPS</span>
-                  </div>
-                  <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-800/40">
-                    <span className="text-[10px] text-emerald-400 block font-semibold">FILE SIZE</span>
-                    <span className="font-bold text-white font-['Chakra_Petch']">
-                      {exportedBlob ? (exportedBlob.size / (1024 * 1024)).toFixed(1) : '0'} MB
-                    </span>
-                  </div>
-                  <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-800/40">
-                    <span className="text-[10px] text-emerald-400 block font-semibold">AUDIO TRACK</span>
-                    <span className="font-bold text-white font-['Chakra_Petch']">256 kbps Stereo</span>
-                  </div>
-                </div>
+                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">
+                  MP4 H.264 • 100% Smooth
+                </span>
               </div>
 
-              {/* Actions */}
-              <div className="flex flex-col sm:flex-row gap-3 pt-1">
+              {/* Action Buttons */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                 <a
                   href={downloadUrl}
-                  download={
-                    exportedBlob?.type.includes('webm') ? 'hockey_master_highlights.webm' : 'hockey_master_highlights.mp4'
-                  }
-                  className="flex-1 flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition border border-slate-700 shadow"
+                  download="stitched_original_video.mp4"
+                  className="flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition font-['Chakra_Petch'] shadow-lg shadow-emerald-950/40 cursor-pointer"
                 >
-                  <Download className="w-4 h-4 text-sky-400" />
-                  Download Master Video
+                  <Download className="w-4 h-4" />
+                  Download Stitched Video (MP4)
                 </a>
 
                 <button
-                  id="export-to-youtube-btn"
-                  onClick={() => {
-                    onClose();
-                    onProceedToYouTube();
-                  }}
-                  className="flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-red-950/50 font-['Chakra_Petch'] cursor-pointer"
+                  type="button"
+                  onClick={onProceedToYouTube}
+                  className="flex items-center justify-center gap-2 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition font-['Chakra_Petch'] shadow-lg shadow-red-950/40 cursor-pointer"
                 >
                   <Upload className="w-4 h-4" />
                   Upload to YouTube
                 </button>
               </div>
 
-              {/* Re-export with another mode toggle */}
-              <div className="border-t border-slate-800 pt-3">
+              {/* Re-render button */}
+              <div className="text-center pt-1">
                 <button
                   type="button"
-                  onClick={() => setShowSettingsAccordion(!showSettingsAccordion)}
-                  className="w-full flex items-center justify-between text-xs text-slate-400 hover:text-slate-200 transition py-1"
+                  onClick={() => {
+                    handleStart();
+                  }}
+                  className="text-xs text-slate-400 hover:text-white flex items-center justify-center gap-1.5 mx-auto transition cursor-pointer"
                 >
-                  <span className="flex items-center gap-1.5 font-medium">
-                    <RotateCcw className="w-3.5 h-3.5 text-sky-400" />
-                    Re-render with different mode, resolution or framerate?
-                  </span>
-                  <span className="text-[11px] text-sky-400 font-mono">
-                    {showSettingsAccordion ? 'Hide ▲' : 'Change Mode ▼'}
-                  </span>
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Re-stitch with different settings
                 </button>
-
-                {showSettingsAccordion && (
-                  <div className="mt-3 p-4 bg-slate-950/70 border border-slate-800 rounded-xl space-y-4 animate-in fade-in duration-150">
-                    {/* ENGINE PICKER */}
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-2 font-['Chakra_Petch']">
-                        Select Mode
-                      </label>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        {(['ffmpeg', 'realtime', 'webcodecs'] as ExportEngine[]).map((eng) => {
-                          const info = getEngineDetails(eng);
-                          return (
-                            <button
-                              key={eng}
-                              type="button"
-                              onClick={() => setSelectedEngine(eng)}
-                              className={`text-left p-2.5 rounded-lg border text-xs transition cursor-pointer ${
-                                selectedEngine === eng
-                                  ? `${info.bg} ${info.border} text-white`
-                                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-850'
-                              }`}
-                            >
-                              <div className="font-bold">{info.title}</div>
-                              <div className="text-[10px] text-slate-400">{info.badge}</div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* RE-RENDER BUTTON */}
-                    <button
-                      type="button"
-                      onClick={() => handleStart()}
-                      className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition font-['Chakra_Petch'] shadow cursor-pointer"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      Re-render Highlights with {getEngineDetails(selectedEngine).title}
-                    </button>
-                  </div>
-                )}
               </div>
             </div>
           )}
