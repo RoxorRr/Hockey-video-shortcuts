@@ -90,33 +90,61 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [activeIndex, clip, onUpdateClip]
   );
 
+  const isAdvancingRef = useRef(false);
+
   // Sync video time bounds on clip change or trim
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !clip) return;
 
+    isAdvancingRef.current = true;
     video.playbackRate = playbackRate;
     video.volume = volume;
 
-    if (video.currentTime < startTime || video.currentTime > endTime) {
-      video.currentTime = startTime;
-      setCurrentPlayTime(0);
-    }
+    // Reset to start time of the new active clip
+    video.currentTime = startTime;
+    setCurrentPlayTime(0);
+
+    const timer = setTimeout(() => {
+      isAdvancingRef.current = false;
+    }, 150);
+
+    return () => clearTimeout(timer);
   }, [clip?.id, startTime, endTime, playbackRate, volume]);
+
+  const handleLoadedMetadata = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = startTime;
+    if (bgVideoRef.current) {
+      bgVideoRef.current.currentTime = startTime;
+    }
+    if (isPlaying) {
+      video.play().catch(() => {});
+      if (bgVideoRef.current) bgVideoRef.current.play().catch(() => {});
+    }
+  };
 
   // Video timeupdate handler
   const handleTimeUpdate = () => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || isAdvancingRef.current) return;
 
     if (video.currentTime >= endTime) {
       // Seamlessly advance to the next clip in timeline sequence so all videos play together
       if (onSelectClipIndex && activeIndex !== null && activeIndex < clips.length - 1) {
+        isAdvancingRef.current = true;
         onSelectClipIndex(activeIndex + 1);
         return;
       }
       video.pause();
       setIsPlaying(false);
+      video.currentTime = startTime;
+      setCurrentPlayTime(0);
+      return;
+    }
+
+    if (video.currentTime < startTime - 0.1) {
       video.currentTime = startTime;
       setCurrentPlayTime(0);
       return;
@@ -129,8 +157,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Keep playing if user was already playing and advanced to next clip
   useEffect(() => {
     if (isPlaying && videoRef.current) {
-      videoRef.current.play().catch(() => {});
-      if (bgVideoRef.current) bgVideoRef.current.play().catch(() => {});
+      const playPromise = videoRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {});
+      }
+      if (bgVideoRef.current) {
+        bgVideoRef.current.play().catch(() => {});
+      }
     }
   }, [activeIndex]);
 
@@ -334,6 +367,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             ref={videoRef}
             src={clip.url}
             playsInline
+            onLoadedMetadata={handleLoadedMetadata}
             onTimeUpdate={handleTimeUpdate}
             className="w-full h-auto max-h-full object-contain relative z-10 pointer-events-none drop-shadow-2xl"
           />

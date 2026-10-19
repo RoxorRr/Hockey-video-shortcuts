@@ -31,6 +31,8 @@ interface ProbeResult {
   duration: number;
   hasAudio: boolean;
   fps: number;
+  vcodec: string;
+  acodec: string;
 }
 
 async function probeMedia(filePath: string): Promise<ProbeResult> {
@@ -39,13 +41,15 @@ async function probeMedia(filePath: string): Promise<ProbeResult> {
   let duration = 0;
   let hasAudio = false;
   let fps = 30;
+  let vcodec = 'h264';
+  let acodec = 'aac';
 
   try {
     const { stdout } = await execFileAsync('/usr/bin/ffprobe', [
       '-v',
       'error',
       '-show_entries',
-      'stream=codec_type,width,height,r_frame_rate:format=duration',
+      'stream=codec_type,codec_name,width,height,r_frame_rate:format=duration',
       '-of',
       'json',
       filePath,
@@ -57,6 +61,7 @@ async function probeMedia(filePath: string): Promise<ProbeResult> {
     if (Array.isArray(parsed.streams)) {
       for (const st of parsed.streams) {
         if (st.codec_type === 'video') {
+          if (st.codec_name) vcodec = st.codec_name;
           if (st.width) width = st.width;
           if (st.height) height = st.height;
           if (st.r_frame_rate) {
@@ -68,6 +73,7 @@ async function probeMedia(filePath: string): Promise<ProbeResult> {
           }
         } else if (st.codec_type === 'audio') {
           hasAudio = true;
+          if (st.codec_name) acodec = st.codec_name;
         }
       }
     }
@@ -75,7 +81,7 @@ async function probeMedia(filePath: string): Promise<ProbeResult> {
     console.warn(`ffprobe failed for ${filePath}, using defaults:`, err);
   }
 
-  return { width, height, duration, hasAudio, fps };
+  return { width, height, duration, hasAudio, fps, vcodec, acodec };
 }
 
 export async function handleFfmpegExport(req: Request, res: Response) {
@@ -100,7 +106,7 @@ export async function handleFfmpegExport(req: Request, res: Response) {
     const {
       aspectRatio = '16:9',
       fps: requestedFps = 30,
-      qualityPreset = '1080p',
+      qualityPreset = 'source',
       clips = [],
       removeEffectsAndTransitions = true,
     } = payload;
@@ -110,7 +116,6 @@ export async function handleFfmpegExport(req: Request, res: Response) {
       return res.status(400).json({ error: 'No video clips provided for export.' });
     }
 
-    // Prepare list of input files matching clip metadata
     interface ValidatedClip {
       inputPath: string;
       start: number;
@@ -119,12 +124,11 @@ export async function handleFfmpegExport(req: Request, res: Response) {
       hasAudio: boolean;
       rate: number;
       volume: number;
+      isTrimmed: boolean;
       probe: ProbeResult;
     }
 
     const validatedClips: ValidatedClip[] = [];
-
-    // Fallback if no metadata clips array: treat all uploaded files as consecutive clips
     const clipCount = Math.max(clips.length, files.length);
 
     for (let i = 0; i < clipCount; i++) {
@@ -148,12 +152,14 @@ export async function handleFfmpegExport(req: Request, res: Response) {
           ? Math.min(fileDuration, meta.endTime)
           : fileDuration;
 
-      // If untrimmed or end <= start, use full file duration
+      // If untrimmed or invalid bounds, use full file duration
       if (end <= start) {
         start = 0;
         end = fileDuration > 0 && fileDuration < 9000 ? fileDuration : 3.0;
       }
 
+      // Check if user trimmed this clip
+      const isTrimmed = start > 0.05 || (fileDuration > 0 && Math.abs(end - fileDuration) > 0.25);
       const duration = Math.max(0.1, end - start);
       const rate = meta && meta.playbackRate && meta.playbackRate > 0 ? meta.playbackRate : 1.0;
       const volume = meta && meta.volume !== undefined ? meta.volume : 1.0;
@@ -166,6 +172,7 @@ export async function handleFfmpegExport(req: Request, res: Response) {
         hasAudio: probe.hasAudio,
         rate,
         volume,
+        isTrimmed: isTrimmed || rate !== 1.0,
         probe,
       });
     }
@@ -175,7 +182,60 @@ export async function handleFfmpegExport(req: Request, res: Response) {
       return res.status(400).json({ error: 'No valid video clips found on server.' });
     }
 
-    // Determine target dimensions and framerate
+    const finalOutputPath = path.join(jobDir, 'stitched_original_video.mp4');
+
+    // 1. FAST-PATH: Lossless Stream Copy Concat (Zero re-encode, 100% original bytes)
+    // If user requested clean join, no clips are trimmed, and video/audio formats match:
+    const anyTrimmed = validatedClips.some((c) => c.isTrimmed);
+    const firstClip = validatedClips[0];
+    const canStreamCopy =
+      removeEffectsAndTransitions &&
+      !anyTrimmed &&
+      validatedClips.length > 1 &&
+      validatedClips.every(
+        (c) =>
+          c.probe.vcodec === firstClip.probe.vcodec &&
+          c.probe.width === firstClip.probe.width &&
+          c.probe.height === firstClip.probe.height &&
+          c.probe.hasAudio === firstClip.probe.hasAudio &&
+          c.probe.acodec === firstClip.probe.acodec,
+      );
+
+    if (canStreamCopy) {
+      console.log(`[FFmpeg] Using Lossless Demuxer Stream Copy for ${validatedClips.length} clips...`);
+      const listFilePath = path.join(jobDir, 'concat_list.txt');
+      const listContent = validatedClips
+        .map((c) => `file '${c.inputPath.replace(/'/g, "'\\''")}'`)
+        .join('\n');
+      fs.writeFileSync(listFilePath, listContent, 'utf-8');
+
+      try {
+        await execFileAsync('/usr/bin/ffmpeg', [
+          '-y',
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          listFilePath,
+          '-c',
+          'copy',
+          '-movflags',
+          '+faststart',
+          finalOutputPath,
+        ]);
+
+        if (fs.existsSync(finalOutputPath) && fs.statSync(finalOutputPath).size > 1000) {
+          console.log('[FFmpeg] Lossless stream copy completed successfully!');
+          return streamFileResponse(res, finalOutputPath, jobDir, files);
+        }
+      } catch (streamCopyErr) {
+        console.warn('[FFmpeg] Stream copy encountered an issue, falling back to perfect sync transcode:', streamCopyErr);
+      }
+    }
+
+    // 2. ROCK-SOLID NORMALIZED PIPELINE (Deterministic A/V Sync, Monotonic PTS, Zero Stutter)
+    // Determine target canvas dimensions and framerate
     let targetW = 1920;
     let targetH = 1080;
     let finalFps = requestedFps || 30;
@@ -222,13 +282,9 @@ export async function handleFfmpegExport(req: Request, res: Response) {
       }
     }
 
-    // Ensure even width and height for H.264 / yuv420p
     targetW = Math.round(targetW / 2) * 2;
     targetH = Math.round(targetH / 2) * 2;
 
-    const finalOutputPath = path.join(jobDir, 'stitched_original_video.mp4');
-
-    // Build FFmpeg command arguments
     const ffmpegArgs: string[] = ['-y'];
 
     // Add all input files
@@ -236,8 +292,6 @@ export async function handleFfmpegExport(req: Request, res: Response) {
       ffmpegArgs.push('-i', clip.inputPath);
     }
 
-    // Build filter_complex string:
-    // Pure clean join: zero overlays, zero transitions, 100% smooth frame-by-frame exact timestamps
     const filterSections: string[] = [];
     const concatInputs: string[] = [];
 
@@ -245,16 +299,22 @@ export async function handleFfmpegExport(req: Request, res: Response) {
       const clip = validatedClips[i];
       const startSec = clip.start.toFixed(3);
       const endSec = clip.end.toFixed(3);
+      const durSec = (clip.duration / (clip.rate || 1.0)).toFixed(3);
 
-      // Video filter: exact trim, reset presentation timestamp, scale & pad to target aspect ratio, fps
+      // Video Filter:
+      // Exact trim -> reset PTS -> rate change -> uniform scale/pad -> force CFR fps ->
+      // settb=AVTB -> setpts=N/(FPS*TB) to eliminate all jitter -> trim exact duration
       let vFilter = `[${i}:v]trim=start=${startSec}:end=${endSec},setpts=PTS-STARTPTS`;
       if (clip.rate !== 1.0) {
         vFilter += `,setpts=${(1 / clip.rate).toFixed(4)}*PTS`;
       }
-      vFilter += `,scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=${finalFps}[v${i}]`;
+      vFilter += `,scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=${finalFps},settb=AVTB,setpts=N/(${finalFps}*TB),trim=duration=${durSec}[v${i}]`;
       filterSections.push(vFilter);
 
-      // Audio filter: exact atrim, reset audio PTS, volume adjust
+      // Audio Filter:
+      // Exact atrim -> reset audio PTS -> rate change -> volume ->
+      // resample to 48000Hz stereo with async sync -> apad with silence to ensure NO early EOF ->
+      // atrim to EXACT matching duration down to the millisecond -> asetpts=N/SR/TB
       if (clip.hasAudio) {
         let aFilter = `[${i}:a]atrim=start=${startSec}:end=${endSec},asetpts=PTS-STARTPTS`;
         if (clip.rate !== 1.0) {
@@ -263,20 +323,18 @@ export async function handleFfmpegExport(req: Request, res: Response) {
         if (clip.volume !== 1.0) {
           aFilter += `,volume=${clip.volume.toFixed(2)}`;
         }
-        aFilter += `[a${i}]`;
+        aFilter += `,aformat=sample_rates=48000:channel_layouts=stereo,aresample=48000:async=1000:first_pts=0,apad,atrim=duration=${durSec},asetpts=N/SR/TB[a${i}]`;
         filterSections.push(aFilter);
       } else {
-        // Synthesize silent audio stream matching clip duration so stream mapping matches
-        const durationSec = (clip.duration / (clip.rate || 1.0)).toFixed(3);
+        // Synthesize silent audio stream with exact duration
         filterSections.push(
-          `anullsrc=channel_layout=stereo:sample_rate=44100,atrim=duration=${durationSec},asetpts=PTS-STARTPTS[a${i}]`,
+          `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${durSec},asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo,asetpts=N/SR/TB[a${i}]`,
         );
       }
 
       concatInputs.push(`[v${i}][a${i}]`);
     }
 
-    // Concatenate all normalized streams into a unified master output
     filterSections.push(
       `${concatInputs.join('')}concat=n=${validatedClips.length}:v=1:a=1[outv][outa]`,
     );
@@ -295,53 +353,66 @@ export async function handleFfmpegExport(req: Request, res: Response) {
       '-preset',
       'veryfast',
       '-crf',
-      '18', // Visually lossless, crisp original quality
+      '18',
       '-pix_fmt',
       'yuv420p',
+      '-fps_mode',
+      'cfr',
+      '-avoid_negative_ts',
+      'make_zero',
+      '-x264-params',
+      'stitch-able=1:open-gop=0:keyint=60:min-keyint=30',
       '-c:a',
       'aac',
       '-b:a',
       '192k',
       '-ar',
-      '44100',
+      '48000',
       '-ac',
       '2',
+      '-max_muxing_queue_size',
+      '2048',
       '-movflags',
       '+faststart',
       finalOutputPath,
     );
 
-    console.log(`Starting FFmpeg join of ${validatedClips.length} clips with 0 effects/transitions...`);
+    console.log(`[FFmpeg] Rendering ${validatedClips.length} clips with perfect A/V sync & monotonic PTS...`);
     await execFileAsync('/usr/bin/ffmpeg', ffmpegArgs);
-    console.log('FFmpeg join completed successfully:', finalOutputPath);
+    console.log('[FFmpeg] Render completed successfully:', finalOutputPath);
 
-    // Return the stitched master video directly to client
-    const stat = fs.statSync(finalOutputPath);
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Content-Length', stat.size);
-    res.setHeader(
-      'Content-Disposition',
-      'attachment; filename="stitched_original_video.mp4"',
-    );
-
-    const readStream = fs.createReadStream(finalOutputPath);
-    readStream.pipe(res);
-
-    readStream.on('close', () => {
-      cleanupJob(jobDir, files);
-    });
-
-    readStream.on('error', (err) => {
-      console.warn('ReadStream error during FFmpeg output delivery:', err);
-      cleanupJob(jobDir, files);
-    });
+    return streamFileResponse(res, finalOutputPath, jobDir, files);
   } catch (error: any) {
-    console.error('Server FFmpeg export failed:', error);
+    console.error('[FFmpeg] Server export failed:', error);
     cleanupJob(jobDir, files);
     if (!res.headersSent) {
       res.status(500).json({ error: error?.message || 'FFmpeg export failed' });
     }
   }
+}
+
+function streamFileResponse(
+  res: Response,
+  outputPath: string,
+  jobDir: string,
+  files: Express.Multer.File[],
+) {
+  const stat = fs.statSync(outputPath);
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Content-Length', stat.size);
+  res.setHeader('Content-Disposition', 'attachment; filename="stitched_original_video.mp4"');
+
+  const readStream = fs.createReadStream(outputPath);
+  readStream.pipe(res);
+
+  readStream.on('close', () => {
+    cleanupJob(jobDir, files);
+  });
+
+  readStream.on('error', (err) => {
+    console.warn('ReadStream error during output delivery:', err);
+    cleanupJob(jobDir, files);
+  });
 }
 
 function cleanupJob(jobDir: string, uploadedFiles: Express.Multer.File[]) {

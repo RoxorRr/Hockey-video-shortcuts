@@ -30,7 +30,7 @@ async function startServer() {
 
   const upload = multer({
     dest: path.join(os.tmpdir(), "hockey_uploads"),
-    limits: { fileSize: 500 * 1024 * 1024 }, // 500 MB per file
+    limits: { fileSize: 2048 * 1024 * 1024 }, // 2 GB per file for multi-minute high-res clips
   });
 
   // Health check endpoint

@@ -72,10 +72,21 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   );
   const [selectedFps, setSelectedFps] = useState<60 | 30>(exportOptions.fps || 30);
   const [showAdvancedAccordion, setShowAdvancedAccordion] = useState(false);
+  const [downloadUrl, setDownloadUrl] = useState<string>('');
+
+  React.useEffect(() => {
+    if (!exportedBlob) {
+      setDownloadUrl('');
+      return;
+    }
+    const url = URL.createObjectURL(exportedBlob);
+    setDownloadUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [exportedBlob]);
 
   if (!isOpen) return null;
-
-  const downloadUrl = exportedBlob ? URL.createObjectURL(exportedBlob) : '';
 
   // Calculate projected resolution
   const getProjectedRes = (preset: ExportQualityPreset) => {
@@ -213,6 +224,17 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           {/* VIEW 1: SETUP & ENGINE SELECTION (Shown before exporting or when configuring) */}
           {!isExporting && !isCompleted && (
             <div className="space-y-4">
+              {/* ERROR BANNER IF PREVIOUS ATTEMPT FAILED */}
+              {statusMessage && (statusMessage.toLowerCase().includes('error') || statusMessage.toLowerCase().includes('failed') || statusMessage.toLowerCase().includes('stopped')) && (
+                <div className="p-3.5 bg-red-950/60 border border-red-500/60 rounded-xl text-red-200 text-xs flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="font-bold text-red-300 font-['Chakra_Petch']">Export Notice</p>
+                    <p className="text-[11px] text-red-200/90 mt-0.5">{statusMessage}</p>
+                  </div>
+                </div>
+              )}
+
               {/* PRIMARY ZERO-STUTTER TOGGLE BANNER */}
               <div
                 onClick={() => setRemoveEffects(!removeEffects)}
@@ -248,9 +270,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
               {/* WHY STUTTER ADVISORY CALLOUT */}
               <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex items-start gap-2.5 text-xs text-slate-400">
-                <AlertCircle className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+                <AlertCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <p className="text-[11px] leading-relaxed">
-                  <strong className="text-white">Why did previous exports freeze?</strong> Browser canvas screen-recording drops frames during complex rendering. The new <strong className="text-emerald-400">Direct Original Stitch</strong> uses native server-grade FFmpeg to concatenate frames mathematically, guaranteeing zero dropped frames.
+                  <strong className="text-white">Why did videos stutter mid-timeline (e.g. minute 2 to 3)?</strong> Unaligned audio/video packet timestamps and variable frame rates cause video players to buffer and stall across clip boundaries. The new engine enforces <strong className="text-emerald-300">strictly monotonic frame presentation timestamps (PTS)</strong>, <strong className="text-emerald-300">resampled 48kHz stereo sync</strong>, and <strong className="text-emerald-300">millisecond-exact stream padding</strong> — or lossless bitstream copy when clips match — guaranteeing 100% fluid playback with zero freezes.
                 </p>
               </div>
 

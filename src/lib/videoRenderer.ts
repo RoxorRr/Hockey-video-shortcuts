@@ -1771,20 +1771,15 @@ export async function exportCombinedVideo(
 
   // 1. Studio Server FFmpeg Engine & Direct Original Join (100% Stutter-Free, Zero Freezing)
   if (engine === 'direct-stitch' || engine === 'ffmpeg') {
-    try {
-      const { exportWithServerFfmpeg } = await import('./ffmpegExportClient');
-      return await exportWithServerFfmpeg(
-        clips,
-        transitions,
-        overlaySettings,
-        aspectRatio,
-        onProgress,
-        options,
-      );
-    } catch (ffmpegErr) {
-      console.warn('Server FFmpeg export encountered an issue, checking browser fallback:', ffmpegErr);
-      onProgress?.(12, 'Connecting to in-browser engine...');
-    }
+    const { exportWithServerFfmpeg } = await import('./ffmpegExportClient');
+    return await exportWithServerFfmpeg(
+      clips,
+      transitions,
+      overlaySettings,
+      aspectRatio,
+      onProgress,
+      options,
+    );
   }
 
   // 2. Deterministic Frame-by-Frame WebCodecs Engine

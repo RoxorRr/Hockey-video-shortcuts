@@ -39,9 +39,11 @@ export async function exportWithServerFfmpeg(
       }
     }
 
-    if (blob) {
-      formData.append(`clip_${i}`, blob, `clip_${i}.mp4`);
+    if (!blob) {
+      throw new Error(`Clip ${i + 1} (${clip.name || 'unnamed'}) video data is unavailable. Please make sure the video is loaded.`);
     }
+
+    formData.append(`clip_${i}`, blob, `clip_${i}.mp4`);
 
     clipsMetadata.push({
       index: i,
@@ -56,7 +58,7 @@ export async function exportWithServerFfmpeg(
   const metadata = {
     aspectRatio,
     fps: options?.fps || 30,
-    qualityPreset: options?.qualityPreset || '1080p',
+    qualityPreset: options?.qualityPreset || 'source',
     clips: clipsMetadata,
     engine: options?.engine || 'direct-stitch',
     removeEffectsAndTransitions: options?.removeEffectsAndTransitions !== false,
@@ -86,13 +88,21 @@ export async function exportWithServerFfmpeg(
       onProgress?.(75, 'FFmpeg is stitching video frames & normalizing audio with zero frame drops...');
     };
 
-    xhr.onload = () => {
+    xhr.onload = async () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         const responseBlob = xhr.response as Blob;
         onProgress?.(100, 'FFmpeg render complete! Master MP4 ready.');
         resolve(responseBlob);
       } else {
-        reject(new Error(`Server FFmpeg export returned status ${xhr.status}`));
+        let errorMsg = `Server FFmpeg export returned status ${xhr.status}`;
+        try {
+          if (xhr.response instanceof Blob) {
+            const text = await xhr.response.text();
+            const parsed = JSON.parse(text);
+            if (parsed.error) errorMsg = parsed.error;
+          }
+        } catch {}
+        reject(new Error(errorMsg));
       }
     };
 
